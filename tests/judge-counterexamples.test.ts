@@ -370,7 +370,7 @@ describe("B. verification that must not produce false agreements", () => {
     expect(next.stage).not.toBe("ready_for_scheduling");
   });
 
-  it("11. a clinical assertion in the free field is withheld by an output control, whatever the prompt said", () => {
+  it("11. a clinical assertion in the free field is withheld by an output control, whatever the prompt said (flagged for review since the sixth pass)", () => {
     const raw = structuredClone(RAW_DRAFT);
     raw.recordings[0].claims.push({
       key: "other",
@@ -385,7 +385,9 @@ describe("B. verification that must not produce false agreements", () => {
     });
     const verified = verifyDraft(raw, sources(), { origin: "recorded", computedAt: NOW });
     expect(verified.recordings[0].claims.some((c) => c.key === "other")).toBe(false);
-    expect(verified.withheld).toEqual([expect.objectContaining({ key: "other", reason: "clinical_content" })]);
+    // Sixth pass: the reason is a flag ("autism", "therapy" are on the list), never a finding that the statement is clinical.
+    expect(verified.withheld).toEqual([expect.objectContaining({ key: "other", reason: "flagged_for_review" })]);
+    expect(verified.withheld[0].detail).toMatch(/flagged for review \(matched: "autism"\)/);
   });
 
   it("11b. a free-field statement its quote does not support is withheld too (since the second round, every free statement is: it is listed, never assessed)", () => {

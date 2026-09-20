@@ -21,22 +21,29 @@
  * key (the whole current submission, the items and their kinds, the current
  * statements of the propositions it cites and of what they rest on): an
  * approval of its text holds only for that context, and is never reused when
- * the key differs. A resolution by the reviewer survives a run: only a new
- * submission reopens an item. And the file approval names a SHA-256 of the
- * whole content, request included, so a change anywhere ends it.
+ * the key differs. A resolution by the reviewer belongs to one instance of a
+ * question and survives every run: only a new submission, or the reviewer
+ * asking again, opens the question again, as a new instance that inherits
+ * nothing; a closed line of the request is never rewritten. And the file
+ * approval names a SHA-256 of the whole content, request included, so a
+ * change anywhere ends it.
  *
  * The code reads no polarity from words. What the recording says is the
  * model's extraction: every cross-check shows it as extracted, next to its
- * quote, and compares it field by field with the form.
+ * quote, and compares it field by field with the form. Every uncertainty the
+ * model declares is kept on the proposition, shown, and part of its key.
  */
 import { documentItems, promptQuestions, TEMPLATE } from "../template";
 import { dict, optionLabel } from "../i18n";
+import { sameText } from "./text";
+import { KEY_LABELS } from "./verify";
 import type {
   ApprovedProposition,
   Criterion,
   Day,
   DocumentExtraction,
   Draft,
+  ExtractedField,
   Evidence,
   Finding,
   JournalEntry,
@@ -180,8 +187,6 @@ function canonical(value: unknown): string {
 }
 
 /* ---------- Small helpers ---------- */
-
-const fold = (text: string) => text.normalize("NFKC").toLowerCase().replace(/\s+/g, " ").trim();
 
 function answerText(submission: Submission, id: string): string {
   const value = submission.answers[id];
@@ -336,8 +341,13 @@ function documentPropositions(submission: Submission, draft: Draft, now: string,
     const read = extraction ? extraction.fields.length : 0;
     // Given to the run and absent from its output: read, with nothing usable back. Not given to any run yet: not read.
     const given = !extraction && (draft.media?.includes(slot.mediaId) ?? false);
+    const unreadableBlocks = extraction?.readings?.filter((r) => !r.readable) ?? [];
     const statement = extraction
-      ? `Received and readable. ${read} field${read === 1 ? "" : "s"} read${pages > 1 ? ` across ${pages} pages` : ""}${withheld > 0 ? `, ${withheld} withheld by the source check` : ""}.`
+      ? `Received and readable. ${read} field${read === 1 ? "" : "s"} read${pages > 1 ? ` across ${pages} pages` : ""}${withheld > 0 ? `, ${withheld} withheld by the source check` : ""}.${
+          unreadableBlocks.length > 0
+            ? ` ${unreadableBlocks.length === 1 ? "One block" : `${unreadableBlocks.length} blocks`} of the ${extraction.blocks} the draft returned called it not readable (${unreadableBlocks.map((r) => r.unreadableReason ?? "no reason given").join("; ")}); the merge is listed below, to confirm.`
+            : ""
+        }`
       : given
         ? "Received. The draft returned nothing for it: 0 fields read."
         : "Received. Not read yet: no draft has read this document.";
@@ -388,6 +398,9 @@ function fieldCriterion(
   return { criterion, finding };
 }
 
+/** The one convention of equality, the same for the deduplication of values and for these criteria. */
+const SAME_TEXT_RULE = "Same text as the form under one convention: case, runs of spaces and punctuation at the ends of words are ignored; word boundaries are kept. A mechanical comparison of two texts, nothing more.";
+
 function rawFieldCriterion(
   key: string,
   field: DocumentExtraction["fields"][number],
@@ -396,13 +409,12 @@ function rawFieldCriterion(
 ): { criterion?: Criterion; finding: Finding } {
   switch (key) {
     case "patient_name": {
-      const expected = fold(`${answerText(submission, "child_first_name")} ${answerText(submission, "child_last_name")}`);
-      const met = fold(field.value) === expected;
+      const met = sameText(field.value, `${answerText(submission, "child_first_name")} ${answerText(submission, "child_last_name")}`);
       return {
         criterion: {
           id: "name_matches_form",
           label: "Name on the referral matches the intake form",
-          rule: "Same first and last name, ignoring case and spacing.",
+          rule: SAME_TEXT_RULE,
           result: met ? "met" : "not_met",
           note: met ? undefined : `Form: ${answerText(submission, "child_first_name")} ${answerText(submission, "child_last_name")}.`,
         },
@@ -410,13 +422,12 @@ function rawFieldCriterion(
       };
     }
     case "guardian_name": {
-      const expected = fold(answerText(submission, "guardian_name"));
-      const met = fold(field.value) === expected;
+      const met = sameText(field.value, answerText(submission, "guardian_name"));
       return {
         criterion: {
           id: "guardian_matches_form",
           label: "Parent or guardian on the referral matches the intake form",
-          rule: "Same full name, ignoring case and spacing.",
+          rule: SAME_TEXT_RULE,
           result: met ? "met" : "not_met",
           note: met ? undefined : `Form: ${answerText(submission, "guardian_name")}.`,
         },
@@ -487,13 +498,12 @@ function rawFieldCriterion(
         finding: uncertainFinding,
       };
     case "dependent_name": {
-      const expected = fold(`${answerText(submission, "child_first_name")} ${answerText(submission, "child_last_name")}`);
-      const met = fold(field.value) === expected;
+      const met = sameText(field.value, `${answerText(submission, "child_first_name")} ${answerText(submission, "child_last_name")}`);
       return {
         criterion: {
           id: "dependent_matches_child",
           label: "Dependent on the card matches the child's name",
-          rule: "Same first and last name, ignoring case and spacing.",
+          rule: SAME_TEXT_RULE,
           result: met ? "met" : "not_met",
           note: met ? undefined : `Form: ${answerText(submission, "child_first_name")} ${answerText(submission, "child_last_name")}.`,
         },
@@ -519,19 +529,62 @@ function rawFieldCriterion(
   }
 }
 
+/**
+ * Several values for a field the form also carries: the mechanical comparison
+ * of each text with the form, under the shared convention. Met when one of
+ * the values is the same text as the form and is not marked uncertain; the
+ * other values stay visible, to confirm. Nothing chooses between them.
+ */
+function valuesAgainstForm(key: string, values: Pick<ExtractedField, "value" | "page" | "uncertain">[], submission: Submission): Criterion | undefined {
+  const forms: Record<string, { id: string; label: string; expected: string }> = {
+    patient_name: { id: "name_matches_form", label: "Name on the referral matches the intake form", expected: `${answerText(submission, "child_first_name")} ${answerText(submission, "child_last_name")}` },
+    guardian_name: { id: "guardian_matches_form", label: "Parent or guardian on the referral matches the intake form", expected: answerText(submission, "guardian_name") },
+    dependent_name: { id: "dependent_matches_child", label: "Dependent on the card matches the child's name", expected: `${answerText(submission, "child_first_name")} ${answerText(submission, "child_last_name")}` },
+  };
+  const form = forms[key];
+  if (!form) return undefined;
+  const same = values.filter((v) => sameText(v.value, form.expected));
+  const others = values.filter((v) => !same.includes(v));
+  const sure = same.filter((v) => !v.uncertain);
+  const lines = [
+    ...same.map((v) => `"${v.value}" (page ${v.page}) is the same text as the form${v.uncertain ? `, and is marked uncertain by the model: ${v.uncertain}` : ""}.`),
+    ...others.map((v) => `"${v.value}" (page ${v.page}) is another reading of the same field${v.uncertain ? `, marked uncertain by the model: ${v.uncertain}` : ""}; it stays visible, to confirm.`),
+    `Form: ${form.expected}. Neither value is chosen by the code.`,
+  ];
+  return {
+    id: form.id,
+    label: form.label,
+    rule: `${SAME_TEXT_RULE} With several values, met when one of them is the same text as the form and is not marked uncertain; the others stay to confirm.`,
+    result: sure.length > 0 ? "met" : same.length > 0 ? "not_assessable" : "not_met",
+    note: lines.join(" "),
+  };
+}
+
 function groupOfItem(itemId: string): PropositionGroup {
   return itemId === "insurance_card" ? "insurance_card" : "referral_letter";
 }
 
 /**
  * The draft returned one media in several blocks. All of them were read and
- * merged by the source check, none ignored; this proposition says so and
- * leaves the merge to the reviewer to confirm.
+ * merged by the source check, none ignored; this proposition says so, lists
+ * what each block said about the document when the blocks disagreed on its
+ * readability, and leaves the merge to the reviewer to confirm.
  */
-function blocksProposition(mediaId: string, group: PropositionGroup, kind: "document" | "recording", blocks: number, evidence: Evidence[], now: string, version: number): Proposition {
+function blocksProposition(
+  mediaId: string,
+  group: PropositionGroup,
+  kind: "document" | "recording",
+  blocks: number,
+  evidence: Evidence[],
+  now: string,
+  version: number,
+  readings: DocumentExtraction["readings"] = undefined,
+): Proposition {
+  const opinions = (readings ?? []).map((r) => `block ${r.block} of ${blocks}: ${r.readable ? "readable" : `not readable (${r.unreadableReason ?? "no reason given"})`}`);
+  const disagree = new Set((readings ?? []).map((r) => r.readable)).size > 1;
   const statement = `To confirm: the draft returned ${blocks} blocks for this ${kind}. All ${blocks} were read and merged, none ignored: ${
     kind === "document" ? "a field proposed in more than one block is shown with every value" : "every statement of every block is listed below"
-  }.`;
+  }.${opinions.length > 0 && (disagree || !readings?.some((r) => r.readable)) ? ` The blocks on its readability: ${opinions.join("; ")}.` : ""}`;
   return keyed({
     id: `blocks:${mediaId}`,
     group,
@@ -545,13 +598,13 @@ function blocksProposition(mediaId: string, group: PropositionGroup, kind: "docu
       label: "One block per media",
       rule: `The draft must return one block per ${kind}. Several blocks are merged, all of them read, and the merge is shown for the reviewer to confirm.`,
       result: "not_assessable",
-      note: `${blocks} blocks returned for "${mediaId}".`,
+      note: `${blocks} blocks returned for "${mediaId}".${opinions.length > 0 ? ` ${opinions.join("; ")}.` : ""}`,
     },
     state: "proposed",
     history: [{ statement, by: "rule", at: now, version }],
     dependsOn: [],
     inRequest: false,
-    details: { blocks: [String(blocks)] },
+    details: { blocks: [String(blocks)], readings: opinions },
   });
 }
 
@@ -561,18 +614,23 @@ function extractionPropositions(submission: Submission, draft: Draft, now: strin
     const slot = submission.documents[item.id];
     if (!slot || slot.status !== "received" || !slot.mediaId) continue;
     const extraction = draft.documents.find((d) => d.mediaId === slot.mediaId);
-    if (!extraction || !extraction.readable) continue;
+    if (!extraction) continue;
     const group = groupOfItem(item.id);
+    // Several blocks are named whatever they said: two unreadable blocks are two opinions to show, not one reason to keep.
     if (extraction.blocks && extraction.blocks > 1) {
-      out.push(blocksProposition(slot.mediaId, group, "document", extraction.blocks, [{ kind: "document", mediaId: slot.mediaId, page: 1, quote: "" }], now, version));
+      out.push(blocksProposition(slot.mediaId, group, "document", extraction.blocks, [{ kind: "document", mediaId: slot.mediaId, page: 1, quote: "" }], now, version, extraction.readings));
     }
+    if (!extraction.readable) continue;
     const fields = [...extraction.fields].sort((a, b) => FIELD_ORDER.indexOf(a.key) - FIELD_ORDER.indexOf(b.key));
     for (const field of fields) {
       const id = `field:${slot.mediaId}:${field.key}`;
       if (field.conflict && field.conflict.length > 0) {
-        // The draft proposed more than one value for this key. Neither is chosen: both are shown, with their passages, and the reviewer picks.
+        // The draft proposed more than one value for this key. Neither is chosen: every value is shown with its passage, every
+        // uncertainty declared on any of them is kept, and the reviewer picks.
         const all = [field, ...field.conflict];
-        const statement = `To confirm: the draft proposed ${all.length} values for this field, ${all.map((v) => `"${v.value}" (page ${v.page})`).join(" and ")}. Neither is taken.`;
+        const doubts = all.filter((v) => v.uncertain).map((v) => `"${v.value}" (page ${v.page}) is marked uncertain by the model: ${v.uncertain}`);
+        const statement = `To confirm: the draft proposed ${all.length} values for this field, ${all.map((v) => `"${v.value}" (page ${v.page})`).join(" and ")}. Neither is taken.${doubts.length > 0 ? ` ${doubts.join(". ")}.` : ""}`;
+        const comparison = valuesAgainstForm(field.key, all, submission);
         out.push(
           keyed({
             id,
@@ -582,19 +640,19 @@ function extractionPropositions(submission: Submission, draft: Draft, now: strin
             nature: "rule",
             evidence: all.map((v) => ({ kind: "document" as const, mediaId: slot.mediaId!, page: v.page, quote: v.quote })),
             finding: "to_confirm",
-            criterion: {
+            criterion: comparison ?? {
               id: "conflicting_extraction",
               label: "One value for the field",
               rule: "The draft must give one value per field. Two different values, each in its passage, are shown side by side and neither is established.",
               result: "not_assessable",
-              note: all.map((v) => `"${v.value}" quoted as "${v.quote}"`).join("; "),
+              note: [all.map((v) => `"${v.value}" quoted as "${v.quote}"`).join("; "), ...doubts.map((d) => `${d}.`)].join(" "),
             },
             state: "proposed",
             history: [{ statement, by: "rule", at: now, version }],
             dependsOn: [],
             inRequest: false,
             checked: all.flatMap((v) => v.checked),
-            details: { values: all.map((v) => v.value) },
+            details: { values: all.map((v) => v.value), uncertain: all.filter((v) => v.uncertain).map((v) => `"${v.value}" (page ${v.page}): ${v.uncertain}`) },
           }),
         );
         continue;
@@ -615,6 +673,8 @@ function extractionPropositions(submission: Submission, draft: Draft, now: strin
           dependsOn: [],
           inRequest: false,
           checked: field.checked,
+          // The uncertainty the model declared, whether or not a criterion carries it: shown, and part of the source key.
+          details: field.uncertain ? { uncertain: [field.uncertain] } : undefined,
         }),
       );
       if (field.key === "referring_provider") {
@@ -654,7 +714,7 @@ const WITHHELD_REASONS: Record<string, string> = {
   segment_out_of_range: "The audio window does not fit the recording.",
   structured_not_in_quote: "A day or a place is not in the quoted words, or an hour is not an hour of the day.",
   free_statement: "A free statement is not assessed by the code: the reviewer reads the quoted words.",
-  clinical_content: "The statement is clinical. Nothing clinical is assessed here.",
+  flagged_for_review: "Flagged for review: a word of the statement is on the short list that sends it to the reviewer unread by the code. Whether it is clinical is not established; nothing clinical is assessed here.",
   unknown_media: "The draft names a file this submission does not hold.",
 };
 
@@ -822,22 +882,30 @@ function recordingPropositions(submission: Submission, draft: Draft, now: string
     }
     review.claims.forEach((claim, index) => {
       const finding: Finding = claim.uncertain ? "to_confirm" : claim.key === "days_that_do_not_work" ? "negative" : "present";
+      // What the model structured, listed under the key it returned it with: a day under the time window is a day under the time
+      // window, never a day that works. The label is the key's own, the same one the source check uses.
       const extracted = [
-        claim.days.length > 0 ? `${claim.days.map((d) => optionLabel("en", d)).join(", ")} under ${claim.key === "days_that_do_not_work" ? "days that do not work" : "days that work"}` : "",
+        claim.days.length > 0 ? `${claim.days.map((d) => optionLabel("en", d)).join(", ")} under ${KEY_LABELS[claim.key]}` : "",
         claim.earliestHour !== null ? `earliest hour ${clockLabel(claim.earliestHour)}` : "",
         claim.location ? `place: ${place(claim.location)}` : "",
       ].filter(Boolean);
       const notes = [claim.uncertain ? `Uncertain, in the model's words: ${claim.uncertain}.` : "", extracted.length > 0 ? `As extracted: ${extracted.join("; ")}.` : ""].filter(Boolean);
-      const criterion: Criterion | undefined =
-        claim.key === "days_that_work" || claim.key === "time_window"
+      const criterion: Criterion =
+        claim.key === "location_preference"
           ? {
+              id: "place_to_confirm",
+              label: "Place: as extracted, not established",
+              rule: "The place is the model's extraction from the quoted words, located in the recording. Whether it is the place the family wants is not established by the code: the reviewer confirms it against the recording.",
+              result: "not_assessable",
+              note: notes.join(" ") || undefined,
+            }
+          : {
               id: "availability_to_confirm",
               label: "Availability: as extracted, not established",
               rule: "The days and hours are the model's extraction from the quoted words, located in the recording. Whether they work for the family is not established by the code: the reviewer confirms them against the recording.",
               result: "not_assessable",
               note: notes.join(" ") || undefined,
-            }
-          : undefined;
+            };
       out.push(
         keyed({
           id: `claim:${mediaId}:${claim.key}:${index}`,
@@ -867,7 +935,7 @@ function recordingPropositions(submission: Submission, draft: Draft, now: string
   return out;
 }
 
-const place = (value: string | null) => (value === "home" ? "sessions at home" : value === "center" ? "sessions at the center" : "either place");
+const place = (value: string | null) => (value === "home" ? "at home" : value === "center" ? "at the center" : "either place");
 
 /** The form's time option as a window of the day: what its start and end are, for a comparison with an extracted earliest hour. */
 const FORM_TIME_WINDOW: Record<string, { start: number; end: number }> = {
@@ -1059,7 +1127,8 @@ function crossCheckPropositions(submission: Submission, draft: Draft, recordingP
     const uncertain = uncertainNote(locations);
     const recorded = places.length === 1 && !uncertain ? places[0] : null;
     const other = recorded !== null && formPlace !== null && recorded !== "either" && recorded !== formPlace;
-    const extracted = places.length === 0 ? "no place is given" : places.length === 1 ? `the place is ${place(places[0])}` : `the place is given more than once (${places.map(place).join(", ")})`;
+    const extracted =
+      places.length === 0 ? "no place is given" : places.length === 1 ? (places[0] === "either" ? "either place is given" : `the place is ${place(places[0])}`) : `the place is given more than once (${places.map(place).join(", ")})`;
     const formSays = formLocation === "either" ? "The form allows either place." : `The form says ${place(formLocation)}.`;
     const base = {
       id: "xcheck:location",
@@ -1198,11 +1267,13 @@ export interface RequestContext {
   key: string;
 }
 
-/** Digest of the whole submission as the family has it now. */
+/** Digest of the whole submission as the family has it now: its date and version included, so a submission sent again is another one. */
 export function submissionKey(submission: Submission): string {
   return sha256Hex(
     canonical({
       reference: submission.reference,
+      version: submission.version,
+      submittedAt: submission.submittedAt,
       language: submission.language,
       answers: submission.answers,
       documents: submission.documents,
@@ -1220,7 +1291,11 @@ export function submissionKey(submission: Submission): string {
  * this context, and each part is digested apart so a change can be named.
  */
 export function requestContext(submission: Submission, propositions: Proposition[], items: RequestItem[]): RequestContext {
-  const open = items.filter((i) => !i.satisfiedAt).map((i) => ({ id: i.propositionId, kind: i.kind, basisMissing: Boolean(i.basisMissing) })).sort((a, b) => (a.id < b.id ? -1 : 1));
+  // A question asked again is another question: its instance is part of what the text was approved for.
+  const open = items
+    .filter((i) => !i.satisfiedAt)
+    .map((i) => ({ id: i.propositionId, kind: i.kind, instance: instanceOf(i), basisMissing: Boolean(i.basisMissing) }))
+    .sort((a, b) => (a.id < b.id ? -1 : 1));
   const whole = submissionKey(submission);
   const itemsKey = sha256Hex(canonical(open));
   const facts: Record<string, string> = {};
@@ -1257,6 +1332,36 @@ function basisOf(p: Proposition, submission: Submission): string {
 export function slotOf(propositionId: string): string {
   if (propositionId.startsWith("rec:")) return `rec:${propositionId.slice(4).split(":")[0]}`;
   return propositionId;
+}
+
+/** Which opening of its question a line is. Lines stored before the field existed are the first opening. */
+export function instanceOf(item: Pick<RequestItem, "instance">): number {
+  return item.instance ?? 1;
+}
+
+/** The latest line of a question: the highest instance, the open one when there is one. */
+function latestLine(items: RequestItem[], slot: string): RequestItem | undefined {
+  let latest: RequestItem | undefined;
+  for (const item of items) {
+    if (slotOf(item.propositionId) !== slot) continue;
+    if (!latest || instanceOf(item) > instanceOf(latest) || (instanceOf(item) === instanceOf(latest) && !item.satisfiedAt)) latest = item;
+  }
+  return latest;
+}
+
+/**
+ * The questions the reviewer resolved and nobody opened again since: the
+ * latest line of the question is closed by the reviewer. A question asked
+ * again (a new submission, the reviewer asking) has an open line as its
+ * latest, and no resolution applies to it: it is a new instance.
+ */
+export function resolvedQuestions(request: RequestDraft | undefined): Set<string> {
+  const slots = new Set<string>();
+  for (const item of request?.items ?? []) {
+    const slot = slotOf(item.propositionId);
+    if (latestLine(request!.items, slot)?.satisfiedBy === "reviewer") slots.add(slot);
+  }
+  return slots;
 }
 
 /** The slot an item was composed for, as the family has it now: a change here is a piece the family sent, or took away. */
@@ -1321,9 +1426,12 @@ function describeContextChange(previous: RequestDraft | undefined, next: Request
  * asked for again) rather than closing. It closes only when the family sent
  * the piece (the slot changed and holds something) or when the reviewer
  * resolved it; a draft that stops carrying the proposition leaves it open,
- * its basis missing. An item the reviewer resolved is asked again only when
- * the proposition asks for it again after a new submission: the caller keeps
- * a resolved item out of the propositions until then.
+ * its basis missing. Each opening of a question is an instance: a question
+ * asked again after a resolution or a reception is a new line with the next
+ * instance number, and a closed line is never touched again. An item the
+ * reviewer resolved is asked again only when the proposition asks for it
+ * again after a new submission, or when the reviewer asks: the caller keeps
+ * a resolved question out of the propositions until then.
  *
  * The text and its approval hold for one context key. When the key differs,
  * nothing approved is reused, whether items are still open or all satisfied.
@@ -1332,32 +1440,35 @@ function composeRequest(submission: Submission, propositions: Proposition[], pre
   const items: RequestItem[] = [];
   const used = new Set<RequestItem>();
   const reopenedItems: string[] = [];
+  const earlier = previous?.items ?? [];
   for (const p of propositions) {
     if (!(p.inRequest && p.requestable)) continue;
     const slot = slotOf(p.id);
     const basis = basisOf(p, submission);
     const facts = p.details;
-    const kept = previous?.items.find((i) => slotOf(i.propositionId) === slot && !used.has(i));
-    if (kept && !kept.satisfiedAt) {
-      used.add(kept);
-      if (familySent(kept, submission)) {
+    const open = earlier.find((i) => slotOf(i.propositionId) === slot && !i.satisfiedAt && !used.has(i));
+    if (open) {
+      used.add(open);
+      if (familySent(open, submission)) {
         // The family sent the piece and it still needs asking (unreadable, say): the old question closes as received, a new one opens.
-        items.push({ propositionId: p.id, kind: p.requestable, basis, facts });
-        items.push({ ...kept, satisfiedAt: now, satisfiedBy: "family", basisMissing: undefined });
+        items.push({ propositionId: p.id, kind: p.requestable, basis, facts, instance: instanceOf(open) + 1 });
+        items.push({ ...open, satisfiedAt: now, satisfiedBy: "family", basisMissing: undefined });
       } else {
         // The same question continues, under the proposition's current id and kind.
-        items.push({ ...kept, propositionId: p.id, kind: p.requestable, basis, facts, basisMissing: undefined });
+        items.push({ ...open, propositionId: p.id, kind: p.requestable, basis, facts, basisMissing: undefined });
       }
       continue;
     }
-    const item: RequestItem = { propositionId: p.id, kind: p.requestable, basis, facts };
-    if (kept?.satisfiedBy === "reviewer") {
+    // No open line: the question is asked for the first time, or again after a line that closed.
+    const latest = latestLine(earlier, slot);
+    const item: RequestItem = { propositionId: p.id, kind: p.requestable, basis, facts, instance: latest ? instanceOf(latest) + 1 : 1 };
+    if (latest?.satisfiedBy === "reviewer") {
       item.reopened = { at: now, because: because || "asked again" };
       reopenedItems.push(p.id);
     }
     items.push(item);
   }
-  for (const item of previous?.items ?? []) {
+  for (const item of earlier) {
     if (used.has(item)) continue;
     if (item.satisfiedAt) {
       items.push(item);
@@ -1682,11 +1793,13 @@ export function editRequest(state: ReviewState, text: string, now: string = new 
  * again, and an approved message is a draft again since its text changes.
  */
 export function resolveRequestItem(state: ReviewState, propositionId: string, note: string, now: string = new Date().toISOString()): ReviewState {
-  const item = state.request?.items.find((i) => i.propositionId === propositionId);
-  if (!state.request || !item) throw new Refused("unknown_proposition", "No such item in the request.");
-  if (item.satisfiedAt) return state;
+  const known = state.request?.items.filter((i) => i.propositionId === propositionId) ?? [];
+  if (!state.request || known.length === 0) throw new Refused("unknown_proposition", "No such item in the request.");
+  // The open line of the question, the current instance: a line already closed, by the family or by the reviewer, is history and stays as it is.
+  const item = known.find((i) => !i.satisfiedAt);
+  if (!item) return state;
   const version = state.version + 1;
-  const items = state.request.items.map((i) => (i.propositionId === propositionId ? { ...i, satisfiedAt: now, satisfiedBy: "reviewer" as const, basisMissing: undefined } : i));
+  const items = state.request.items.map((i) => (i === item ? { ...i, satisfiedAt: now, satisfiedBy: "reviewer" as const, basisMissing: undefined } : i));
   const propositions = state.propositions.map((p) => (p.id === propositionId ? { ...p, inRequest: false } : p));
   const label = state.propositions.find((p) => p.id === propositionId)?.label ?? propositionId;
   let next: ReviewState = { ...state, request: { ...state.request, items }, propositions, version };
@@ -1808,15 +1921,19 @@ function reviewedThrough(p: Proposition, request: RequestDraft | undefined): boo
  * Keeps what the reviewer did on propositions whose source key is unchanged.
  * Any other proposition is proposed again: the old statement and the
  * reviewer's work go to the history, and a reviewed one, reviewed through the
- * request included, is flagged. An item the reviewer resolved is not asked
- * again by a run: only a new submission puts it back into the request.
+ * request included, is flagged. A question the reviewer resolved, and nobody
+ * opened again since, is not asked again by a run, whether its proposition is
+ * unchanged, proposed again, or new to this draft: only a new submission, or
+ * the reviewer, opens it again.
  */
 function merge(previous: Proposition[], fresh: Proposition[], now: string, because: string, context: { request?: RequestDraft; submissionChanged: boolean }): Proposition[] {
-  const resolved = new Set((context.request?.items ?? []).filter((i) => i.satisfiedBy === "reviewer").map((i) => slotOf(i.propositionId)));
-  const asked = (old: Proposition, next: Proposition) => (resolved.has(slotOf(next.id)) && !context.submissionChanged ? false : old.inRequest || next.inRequest);
+  const resolved = context.submissionChanged ? new Set<string>() : resolvedQuestions(context.request);
+  const asked = (old: Proposition | undefined, next: Proposition) => (resolved.has(slotOf(next.id)) ? false : (old?.inRequest ?? false) || next.inRequest);
   return fresh.map((next) => {
     const old = previous.find((p) => p.id === next.id);
-    if (!old) return next;
+    // A proposition new to this draft can still be the proposition of a resolved question (an unusable recording, usable in
+    // between): the resolution applies to it as to any other.
+    if (!old) return { ...next, inRequest: next.requestable ? asked(undefined, next) : false };
     if (old.sourceKey === next.sourceKey) {
       return { ...old, dependsOn: next.dependsOn, requestable: next.requestable, inRequest: asked(old, next), checked: next.checked };
     }

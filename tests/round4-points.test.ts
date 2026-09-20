@@ -199,7 +199,8 @@ describe("structured comparisons of hours and places: what disagrees, what is to
       return find(buildReview(sub, d, NOW), "xcheck:location")!;
     };
     expect(placeCheck("home", "center", "at the center").finding).toBe("conflicting");
-    expect(placeCheck("home", "center", "at the center").statement).toMatch(/^As extracted from the recording \("at the center"\), the place is sessions at the center\. The form says sessions at home\. To confirm which place\.$/);
+    // Sixth pass: "the place is at the center", not "sessions at the center" (a cosmetic of the fifth verdict).
+    expect(placeCheck("home", "center", "at the center").statement).toMatch(/^As extracted from the recording \("at the center"\), the place is at the center\. The form says at home\. To confirm which place\.$/);
     expect(placeCheck("either", "center", "at the center").finding).toBe("to_confirm");
     expect(placeCheck("center", "either", "anywhere").finding).toBe("to_confirm");
     expect(placeCheck("center", "center", "at the center").finding).toBe("to_confirm");

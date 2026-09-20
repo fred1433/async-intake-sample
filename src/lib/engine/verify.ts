@@ -17,17 +17,21 @@
  * A free statement (other) is never assessed: it is listed for the reviewer.
  *
  * Duplicates are handled over the whole raw output: several blocks for one
- * media are merged, none ignored; two fields with one key are one field
- * (merged when they carry the same value, and uncertain when one of them is;
- * kept as one field with its conflicting values when they differ). Anything
- * that fails is withheld, listed, and never shown as a finding. A claim with
- * no source at all is refused the same way.
+ * media are merged, none ignored, and every block's opinion on readability is
+ * kept; two fields with one key are one field (merged when they carry the
+ * same text under the one convention of equality the review shares, and
+ * uncertain when one of them is; kept as one field with its other values
+ * when the texts differ). Anything that fails is withheld, listed, and never
+ * shown as a finding. A claim with no source at all is refused the same way.
+ * A claim whose words are on a short list is flagged for review, which
+ * establishes nothing about it.
  *
  * What the code cannot check is the wording of a rephrase: the claim says so,
  * and the reviewer judges it against the recording.
  */
 import type { RawClaim, RawDraft, RawTranscript } from "./raw";
-import type { ConflictingValue, Day, Draft, DocumentExtraction, ExtractedField, Place, RecordingClaim, RecordingReview, Transcript, TranscriptSegment, Withheld } from "./types";
+import { sameText } from "./text";
+import type { BlockReading, ConflictingValue, Day, Draft, DocumentExtraction, ExtractedField, Place, RecordingClaim, RecordingReview, Transcript, TranscriptSegment, Withheld } from "./types";
 
 export interface DocumentSource {
   mediaId: string;
@@ -144,8 +148,6 @@ export function datesIn(text: string): string[] {
 
 const DATE_KEYS = new Set(["date_of_birth", "referral_date", "effective_date"]);
 
-const alnum = (text: string) => text.normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
-
 /* ---------- The transcript as words, each with its segment ---------- */
 
 interface Token {
@@ -228,7 +230,8 @@ const PLACE_WORDS: Record<Place, string[]> = {
   either: ["either", "both", "anywhere", "wherever", "cualquiera", "cualquier", "ambos", "dos", "donde", "sea"],
 };
 
-const KEY_LABELS: Record<RawClaim["key"], string> = {
+/** How each key of the raw schema is named wherever the code lists what the model put under it. */
+export const KEY_LABELS: Record<RawClaim["key"], string> = {
   days_that_work: "days that work",
   days_that_do_not_work: "days that do not work",
   time_window: "the time window",
@@ -238,8 +241,25 @@ const KEY_LABELS: Record<RawClaim["key"], string> = {
 
 export const clock = (hour: number) => `${String(hour).padStart(2, "0")}:00`;
 
-/** Words that would make a statement clinical. Nothing clinical is assessed here, so such a statement is withheld. */
-const CLINICAL = /\b(autis\w*|asd|diagnos\w*|disorder\w*|spectrum|symptom\w*|sever(?:e|ity)|meltdown\w*|tantrum\w*|aggress\w*|self[- ]?injur\w*|eligib\w*|therap\w*|medicat\w*|seizure\w*|adhd|anxiety|anxious|depress\w*|cognitive|developmental|delay\w*|non[- ]?verbal|regress\w*|sensory|prognos\w*|treatment|cur(?:e|es|ed|ing)|heal\w*|improv\w*|behavio\w*|hours (?:of|a|per) week|units)\b/i;
+/**
+ * Whole words, and a few two-word phrases, that send a statement to the
+ * reviewer unread by the code. A match flags the statement for review; it
+ * does not establish that the statement is clinical, and nothing clinical is
+ * assessed here. Whole words only: "delayed" is not "delay", and neither is
+ * on the list.
+ */
+const FLAGGED_WORDS = [
+  "autism", "autistic", "asd", "diagnosis", "diagnoses", "diagnosed", "diagnostic", "disorder", "disorders", "spectrum",
+  "symptom", "symptoms", "severe", "severity", "meltdown", "meltdowns", "tantrum", "tantrums", "aggression", "aggressive",
+  "self-injury", "self-injurious", "self injury", "self injurious", "eligible", "eligibility", "therapy", "therapies", "therapist",
+  "therapists", "medication", "medications", "medicated", "seizure", "seizures", "adhd", "anxiety", "anxious", "depression",
+  "depressed", "cognitive", "developmental", "nonverbal", "non-verbal", "non verbal", "regression", "regressed", "sensory",
+  "prognosis", "treatment", "treatments", "cure", "cures", "cured", "curing", "heal", "heals", "healed", "healing", "improve",
+  "improves", "improved", "improvement", "behavior", "behaviors", "behaviour", "behaviours", "behavioral", "behavioural",
+  "hours a week", "hours per week", "hours of therapy", "units",
+];
+const escape = (word: string) => word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/ /g, "\\s+");
+const FLAGGED = new RegExp(`(?<![\\p{L}\\p{N}])(?:${FLAGGED_WORDS.map(escape).join("|")})(?![\\p{L}\\p{N}])`, "iu");
 
 const ATTRIBUTION = /^(the (parent|family|guardian|caregiver) (states|says|said|reports|mentions|notes|explains|indicates) (that )?)/i;
 
@@ -301,7 +321,7 @@ function checkDocument(blocks: DocumentBlock[], source: DocumentSource, hold: Ho
         } else {
           checked.push("no machine-form date: the rule will say it cannot be assessed");
         }
-      } else if (normalized && alnum(normalized) !== alnum(value)) {
+      } else if (normalized && !sameText(normalized, value)) {
         checked.push(`machine form "${normalized}" dropped: it does not match the value`);
         normalized = null;
       }
@@ -309,6 +329,7 @@ function checkDocument(blocks: DocumentBlock[], source: DocumentSource, hold: Ho
     }
   }
   // Two fields with the same key are one field. The raw shape does not forbid the repeat; the review must never carry two propositions with one id.
+  // Same text under the shared convention: merged. Two texts: both kept, neither chosen.
   const fields: ExtractedField[] = [];
   for (const field of passed) {
     const first = fields.find((f) => f.key === field.key);
@@ -316,7 +337,7 @@ function checkDocument(blocks: DocumentBlock[], source: DocumentSource, hold: Ho
       fields.push(field);
       continue;
     }
-    if (alnum(first.value) === alnum(field.value)) {
+    if (sameText(first.value, field.value)) {
       first.checked.push(`proposed again with the same value (page ${field.page}): merged into this field`);
       // An uncertainty on either reading makes the merged field uncertain: a merge never loses a doubt.
       if (field.uncertain) {
@@ -329,10 +350,13 @@ function checkDocument(blocks: DocumentBlock[], source: DocumentSource, hold: Ho
     first.conflict = [...(first.conflict ?? []), other];
     first.checked.push(`another value was proposed for the same field, "${field.value}" (page ${field.page}): both are kept, neither is chosen`);
   }
-  const readable = blocks.some(({ block }) => block.readable);
-  const unreadableReason = readable ? null : blocks.map(({ block }) => block.unreadableReason?.trim() || "").find(Boolean) || null;
+  // Every block's opinion is kept: a document is readable when one block read it, and when none did, every reason stays.
+  const readings: BlockReading[] = blocks.map(({ block, rank }) => ({ block: rank, readable: block.readable, unreadableReason: block.readable ? null : block.unreadableReason?.trim() || null }));
+  const readable = readings.some((r) => r.readable);
+  const reasons = readings.filter((r) => !r.readable).map((r) => (blocks.length > 1 ? `block ${r.block} of ${blocks.length}: ${r.unreadableReason ?? "no reason given"}` : r.unreadableReason ?? ""));
+  const unreadableReason = readable ? null : reasons.filter(Boolean).join("; ") || null;
   const mediaId = blocks[0].block.mediaId;
-  return { mediaId, readable, unreadableReason, fields, ...(blocks.length > 1 ? { blocks: blocks.length } : {}) };
+  return { mediaId, readable, unreadableReason, fields, ...(blocks.length > 1 ? { blocks: blocks.length, readings } : {}) };
 }
 
 function checkClaim(claim: RawClaim, source: RecordingSource, hold: (reason: Withheld["reason"], detail: string) => void, block: { rank: number; of: number }): RecordingClaim | null {
@@ -357,9 +381,12 @@ function checkClaim(claim: RawClaim, source: RecordingSource, hold: (reason: Wit
   }
   const checked = [`quoted words found in the recording at ${located.start.toFixed(1)}s to ${located.end.toFixed(1)}s`];
   if (block.of > 1) checked.push(`proposed in block ${block.rank} of ${block.of} the draft returned for this recording`);
-  const clinical = [claim.statement, claim.label, claim.uncertain ?? ""].join(" ").match(CLINICAL);
-  if (clinical) {
-    hold("clinical_content", `"${claim.label}": the statement goes beyond scheduling and administrative facts ("${clinical[0]}"). Nothing clinical is assessed here.`);
+  const flagged = [claim.statement, claim.label, claim.uncertain ?? ""].join(" ").match(FLAGGED);
+  if (flagged) {
+    hold(
+      "flagged_for_review",
+      `"${claim.label}": flagged for review (matched: "${flagged[0]}"). The word is on the short list that sends a statement to the reviewer unread by the code; whether the statement is clinical is not established by the code. Nothing clinical is assessed here.`,
+    );
     return null;
   }
   if (claim.key === "other") {

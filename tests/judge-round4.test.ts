@@ -517,7 +517,7 @@ describe("R4-P. positive controls of the fourth round: what already held, and mu
     expect(name.criterion?.result).toBe("not_assessable");
   });
 
-  it("P10. a free statement is listed for the reviewer and never assessed; a clinical one is withheld as clinical", () => {
+  it("P10. a free statement is listed for the reviewer and never assessed; one with a word on the list is withheld, flagged for review (adapted in the sixth pass)", () => {
     const free = recordingDraft(HAND_TRANSCRIPT, [claim({ key: "other", label: "Scheduling note", quote: "Sam has swimming on Thursdays", nature: "extraction", statement: "The parent states that Sam has swimming on Thursdays." })]);
     expect(free.withheld).toEqual([expect.objectContaining({ key: "other", reason: "free_statement" })]);
     const s = buildReview(submission(), free, NOW);
@@ -526,6 +526,7 @@ describe("R4-P. positive controls of the fourth round: what already held, and mu
     const clinical = recordingDraft(HAND_TRANSCRIPT, [
       claim({ key: "other", label: "Other", statement: "The parent states that Sam's autism is severe.", nature: "inference", quote: "we would rather do the sessions at home" }),
     ]);
-    expect(clinical.withheld).toEqual([expect.objectContaining({ key: "other", reason: "clinical_content" })]);
+    // Sixth pass: "clinical_content" became "flagged_for_review": the list flags, it establishes nothing (R5-S07).
+    expect(clinical.withheld).toEqual([expect.objectContaining({ key: "other", reason: "flagged_for_review" })]);
   });
 });

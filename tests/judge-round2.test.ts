@@ -380,7 +380,8 @@ describe("B. verification that still confuses word presence with support of a fa
     expect(d.recordings[0].claims.some((c) => c.key === "other")).toBe(false);
     expect(d.withheld).toHaveLength(1);
     expect(d.withheld[0].key).toBe("other");
-    expect(["clinical_content", "free_statement"]).toContain(d.withheld[0].reason);
+    // Sixth pass: the word list flags a statement for review, it does not establish that it is clinical (R5-S07, S08).
+    expect(["flagged_for_review", "free_statement"]).toContain(d.withheld[0].reason);
   });
 
   it("B10. a value assembled from distant words of the page, \"Sam Moreno, MD\", is withheld: the value must be contiguous in the passage", () => {

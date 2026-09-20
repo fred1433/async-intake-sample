@@ -34,7 +34,7 @@ function usable(stored: ReviewState | null): stored is ReviewState {
       typeof stored.builtAt === "string" &&
       Array.isArray(stored.propositions) &&
       stored.propositions.every((p) => typeof p.sourceKey === "string") &&
-      (!stored.request || typeof stored.request.contextKey === "string") &&
+      (!stored.request || (typeof stored.request.contextKey === "string" && stored.request.items.every((i) => typeof i.instance === "number"))) &&
       Array.isArray(stored.journal),
   );
 }

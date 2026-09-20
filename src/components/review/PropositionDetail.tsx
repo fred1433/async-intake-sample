@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useRef } from "react";
-import { AlertTriangle, Check, FileText, Mic, Pencil, Send, TextCursorInput } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { AlertTriangle, Check, ChevronDown, FileText, Mic, Pencil, Send, TextCursorInput } from "lucide-react";
 import type { Evidence, Proposition, RequestDraft } from "@/lib/engine/types";
 import { CriterionPill, FindingPill, Kbd, NaturePill, StatePill, formatSeconds, formatWhen } from "./bits";
 
@@ -47,12 +47,17 @@ export function PropositionDetail({
   onSelectEvidence: (index: number) => void;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  // On a phone the rule of the criterion is folded behind "Why", so the source stays in view; on a wider screen it is always shown.
+  // The fold is remembered per proposition, so moving to the next one folds it again.
+  const [whyFor, setWhyFor] = useState<string | null>(null);
+  const why = whyFor === p.id;
   useEffect(() => {
     if (editing) {
       textareaRef.current?.focus();
       textareaRef.current?.select();
     }
   }, [editing]);
+  const doubts = p.details?.uncertain ?? [];
 
   const byRule = p.nature === "rule";
   const inApprovedRequest = p.inRequest && request?.status === "approved";
@@ -125,17 +130,33 @@ export function PropositionDetail({
             <span className="italic">“{previous.statement}”</span> ({previous.by === "ai" ? "AI" : previous.by === "rule" ? "rule" : "reviewer"}, {formatWhen(previous.at)}).
           </p>
         )}
+        {doubts.length > 0 && (
+          <div className="mt-2 rounded-lg border border-amber-soft bg-amber-soft/40 px-3 py-2 text-[12.5px] leading-[1.5] text-amber-ink">
+            <p className="font-semibold">Marked uncertain by the model</p>
+            <ul className="mt-0.5 list-disc space-y-0.5 pl-4">
+              {doubts.map((line) => (
+                <li key={line}>{line}</li>
+              ))}
+            </ul>
+          </div>
+        )}
       </div>
 
       {p.criterion && (
-        <div className="mt-4 rounded-lg border border-line bg-white p-3">
-          {/* On a phone the result sits above the text, so the rule keeps the full width of the card. */}
+        <div className="order-2 mt-4 rounded-lg border border-line bg-white p-3 md:order-none">
+          {/* On a phone the result sits above the text and the rule is folded behind "Why"; on a wider screen the rule is always shown. */}
           <div className="flex flex-col-reverse gap-2 md:flex-row md:items-start md:justify-between md:gap-3">
             <div className="min-w-0">
               <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink-3">Criterion applied</p>
               <p className="mt-1 text-[14px] font-semibold text-ink">{p.criterion.label}</p>
-              <p className="mt-0.5 text-[13px] text-ink-2">Rule: {p.criterion.rule}</p>
-              {p.criterion.note && <p className="mt-1 text-[12.5px] text-ink-3">{p.criterion.note}</p>}
+              <div className={why ? "" : "hidden md:block"}>
+                <p className="mt-0.5 text-[13px] text-ink-2">Rule: {p.criterion.rule}</p>
+                {p.criterion.note && <p className="mt-1 text-[12.5px] text-ink-3">{p.criterion.note}</p>}
+              </div>
+              <button type="button" onClick={() => setWhyFor(why ? null : p.id)} className="mt-1 inline-flex items-center gap-1 text-[12.5px] font-semibold text-brand-strong md:hidden" aria-expanded={why}>
+                <ChevronDown className={`size-3.5 transition-transform ${why ? "rotate-180" : ""}`} />
+                {why ? "Hide why" : "Why"}
+              </button>
             </div>
             <span className="self-start">
               <CriterionPill result={p.criterion.result} />
@@ -144,7 +165,7 @@ export function PropositionDetail({
         </div>
       )}
 
-      <div className="mt-4">
+      <div className="order-1 mt-4 md:order-none">
         <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink-3">Source</p>
         <div className="mt-1.5 flex flex-wrap gap-1.5">
           {p.evidence.map((e, index) => (
@@ -185,7 +206,7 @@ export function PropositionDetail({
         )}
       </div>
 
-      <div className="mt-4">
+      <div className="order-3 mt-4 md:order-none">
         <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink-3">State</p>
         <ul className="mt-1.5 space-y-1 text-[13px] text-ink-2">
           {p.history.map((h, index) => (
@@ -207,7 +228,7 @@ export function PropositionDetail({
         </ul>
       </div>
 
-      <div className="mt-auto pb-1 pt-5">
+      <div className="order-4 mt-auto pb-1 pt-5 md:order-none">
         <div className="flex flex-wrap items-center gap-2">
           {p.inRequest && (
             <button

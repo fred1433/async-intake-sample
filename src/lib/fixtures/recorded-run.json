@@ -2,7 +2,7 @@
   "note": "Recorded run of the two model calls on the sample media, verified by the code. The draft next to this file is served as is; no call happens when the page shows it. The model answers are in recorded-raw.json; verifiedAgainAt says when the code's check was last run again on them without a call.",
   "recordedAt": "2026-09-20T17:49:32.635Z",
   "elapsedMs": 25279,
-  "verifiedAgainAt": "2026-09-20T19:24:53.274Z",
+  "verifiedAgainAt": "2026-09-20T20:35:39.900Z",
   "usage": {
     "transcription": {
       "model": "gemini-3.8-flash",

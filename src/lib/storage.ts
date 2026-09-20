@@ -5,7 +5,7 @@
  * keep these records on the server, per user, with an access log.
  */
 export const SUBMISSION_KEY = "async-intake:submission:v1";
-export const REVIEW_KEY = "async-intake:review:v5";
+export const REVIEW_KEY = "async-intake:review:v6";
 export const INTAKE_PREFIX = "async-intake:intake:v1:";
 export const LANG_KEY = "async-intake:lang";
 

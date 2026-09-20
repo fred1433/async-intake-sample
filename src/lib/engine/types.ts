@@ -83,13 +83,24 @@ export interface ExtractedField {
   conflict?: ConflictingValue[];
 }
 
+/** What one block of the draft said about the readability of a document, kept when the document came back in several blocks. */
+export interface BlockReading {
+  block: number;
+  readable: boolean;
+  unreadableReason: string | null;
+}
+
 export interface DocumentExtraction {
   mediaId: string;
+  /** True when at least one block read the document. */
   readable: boolean;
+  /** When no block read it: every reason the blocks gave, none dropped. */
   unreadableReason: string | null;
   fields: ExtractedField[];
   /** Set when the draft returned this document in several blocks: all were read and merged, none ignored. */
   blocks?: number;
+  /** Every block's opinion on readability, when there were several blocks: a disagreement between them is shown, not decided. */
+  readings?: BlockReading[];
 }
 
 export type Day = "monday" | "tuesday" | "wednesday" | "thursday" | "friday" | "saturday" | "sunday";
@@ -141,7 +152,7 @@ export interface Withheld {
     | "segment_out_of_range"
     | "structured_not_in_quote"
     | "free_statement"
-    | "clinical_content"
+    | "flagged_for_review"
     | "unknown_media";
   detail: string;
 }
@@ -237,6 +248,12 @@ export interface Proposition {
 export interface RequestItem {
   propositionId: string;
   kind: "missing_item" | "unreadable_item" | "confirm";
+  /**
+   * Which opening of the question this line is: 1 the first time it was asked, 2 when it was asked again after a resolution or a
+   * reception, and so on. A resolution by the reviewer belongs to one instance; a question asked again is a new instance,
+   * with nothing inherited. Absent on lines stored before this field existed: read as 1.
+   */
+  instance?: number;
   /** Filled when the family provides what was asked (a new submission), or when the reviewer resolves the item. Never by a draft that stops carrying it. */
   satisfiedAt?: string;
   satisfiedBy?: "family" | "reviewer";
