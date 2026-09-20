@@ -130,7 +130,7 @@ describe("a resolution by the reviewer survives a run and yields only to a new s
     s = applySubmission(s, again, draft(), T3);
     const open = s.request?.items.filter((i) => i.propositionId === "doc:insurance_card" && !i.satisfiedAt) ?? [];
     expect(open).toHaveLength(1);
-    expect(open[0].reopened?.because).toMatch(/submission changed/);
+    expect(open[0].reopened?.because).toMatch(/the family sent the form again/);
     expect(s.request?.items.some((i) => i.propositionId === "doc:insurance_card" && i.satisfiedBy === "reviewer")).toBe(true);
     expect(s.journal.some((e) => e.action === "request_updated" && /asked again/.test(e.detail))).toBe(true);
     expect(s.request?.status).toBe("draft");

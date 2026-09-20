@@ -1975,7 +1975,7 @@ export function applySubmission(state: ReviewState, submission: Submission, fall
   const draft: Draft = { ...state.draft, documents, recordings, withheld, media };
   const version = state.version + 1;
   const summary = changes.length > 0 ? changes.join("; ") : `submission version ${submission.version}`;
-  let next = rebuild(state, submission, draft, version, now, "the submission changed");
+  let next = rebuild(state, submission, draft, version, now, "the family sent the form again");
   next = entry(next, {
     at: now,
     actor: "parent",
