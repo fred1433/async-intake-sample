@@ -284,8 +284,8 @@ export interface RequestDraft {
   approvedText?: string;
   /** Digest of the context of the current text (see RequestApproval.contextKey); an approval holds only for the same context. */
   contextKey: string;
-  /** The parts of the context, digested apart, so a change can be named: who and which child, which items, which facts. */
-  contextParts?: { recipient: string; items: string; facts: string };
+  /** The parts of the context, digested apart, so a change can be named: who and which child, which items, and the facts of each item by id. */
+  contextParts?: { recipient: string; items: string; facts: Record<string, string> };
   approvedContextKey?: string;
   /** Every approval this request received, with its text; a text that changed is marked superseded. */
   approvals: RequestApproval[];

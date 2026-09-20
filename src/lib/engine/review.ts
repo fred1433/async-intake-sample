@@ -1176,8 +1176,8 @@ export interface RequestContext {
   recipient: string;
   /** Which items, of which kind, and whether their basis is still there. */
   items: string;
-  /** The facts asked about: the structured details and the current statement of every proposition the request cites. */
-  facts: string;
+  /** The facts asked about, by item: the structured details and the current statement of the proposition the item cites. */
+  facts: Record<string, string>;
   key: string;
 }
 
@@ -1203,15 +1203,12 @@ export function requestContext(submission: Submission, propositions: Proposition
     }),
   );
   const itemsKey = sha256Hex(canonical(open));
-  const facts = sha256Hex(
-    canonical(
-      open.map((i) => {
-        const p = propositions.find((q) => q.id === i.id);
-        return p ? { details: p.details ?? null, statement: p.statement } : null;
-      }),
-    ),
-  );
-  return { recipient, items: itemsKey, facts, key: sha256Hex(`${recipient}:${itemsKey}:${facts}`) };
+  const facts: Record<string, string> = {};
+  for (const i of open) {
+    const p = propositions.find((q) => q.id === i.id);
+    facts[i.id] = sha256Hex(canonical(p ? { details: p.details ?? null, statement: p.statement } : null));
+  }
+  return { recipient, items: itemsKey, facts, key: sha256Hex(`${recipient}:${itemsKey}:${canonical(facts)}`) };
 }
 
 export function requestContextKey(submission: Submission, propositions: Proposition[], items: RequestItem[]): string {
@@ -1260,9 +1257,10 @@ function describeContextChange(previous: RequestDraft | undefined, next: Request
   const parts = previous.contextParts;
   if (!parts) return "context changed: the recipient, the child, the language, the items or the facts asked about changed";
   const changed: string[] = [];
-  if (parts.recipient !== next.recipient) changed.push("context changed: the recipient, the child or the language changed");
-  if (parts.items !== next.items) changed.push("context changed: the items asked for changed");
-  if (parts.facts !== next.facts) changed.push("fact corrected: a fact asked about was corrected or recomputed");
+  if (parts.recipient !== next.recipient) changed.push("context changed: the recipient, the child or the language");
+  if (parts.items !== next.items) changed.push("context changed: the items asked for");
+  // A fact counts as changed only for an item that was already asked about: a new item brings its facts, it does not correct one.
+  if (Object.keys(next.facts).some((id) => id in parts.facts && parts.facts[id] !== next.facts[id])) changed.push("fact corrected: a fact asked about was corrected or recomputed");
   return changed.join("; ");
 }
 
@@ -1373,7 +1371,7 @@ function refreshRequest(state: ReviewState, now: string, because: string): Revie
       at: now,
       actor: "rule",
       action: "request_updated",
-      detail: `The context of the request changed (${because}: ${editedDropped.because}): the text was composed again by rule 1. The reviewer's wording is kept here, without its approval.`,
+      detail: `The request was composed again by rule 1 (${because}: ${editedDropped.because}). The reviewer's wording is kept here, without its approval.`,
       target: "request",
       from: editedDropped.text,
       to: request.text,
