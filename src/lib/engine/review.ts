@@ -73,7 +73,6 @@ export const FINDING_LABELS: Record<Finding, string> = {
   present: "Present",
   unreadable: "Not readable",
   missing: "Not received",
-  consistent: "Consistent",
   conflicting: "Sources disagree",
   to_confirm: "To confirm",
   unusable_audio: "Audio not usable",
@@ -363,12 +362,52 @@ function documentPropositions(submission: Submission, draft: Draft, now: string,
   return out;
 }
 
+/**
+ * True when the line of the passage that carries the value marks it as a
+ * provider: "Referring provider:" or "Dr." before the name, or a credential
+ * (MD, DO, NP, PA, PhD) right after it. Without such a marker the value is a
+ * name found in the letter, and its role is for the reviewer to confirm.
+ */
+export function providerRoleMarked(value: string, quote: string): boolean {
+  const needle = fold(value);
+  const line = quote.split(/\n/).find((l) => fold(l).includes(needle)) ?? quote;
+  const folded = fold(line);
+  const at = folded.indexOf(needle);
+  if (at === -1) return false;
+  const before = folded.slice(0, at);
+  const after = folded.slice(at + needle.length);
+  const credential = /^[\s,.]*(?:md|np|phd|m\.d\.|d\.o\.)\b/;
+  if (/(?:referring|attending|treating)\s+(?:provider|physician|doctor|clinician|practitioner)\s*:\s*$/.test(before)) return true;
+  if (/\bdr\.?\s*$/.test(before)) return true;
+  if (credential.test(after)) return true;
+  // The credential can sit inside the value itself ("Alice Moreno, MD").
+  return /[,\s](?:md|np|phd)\s*$/.test(needle);
+}
+
 function fieldCriterion(
   key: string,
   field: DocumentExtraction["fields"][number],
   submission: Submission,
 ): { criterion?: Criterion; finding: Finding } {
   const uncertainFinding: Finding = field.uncertain ? "to_confirm" : "present";
+  const { criterion, finding } = rawFieldCriterion(key, field, submission, uncertainFinding);
+  // An uncertain reading is never a met criterion: the same convention as for the recording. The comparison stays in the note.
+  if (field.uncertain && criterion && criterion.result !== "not_assessable") {
+    const comparison = criterion.result === "met" ? "The value would meet the rule as read" : `The value as read does not meet the rule${criterion.note ? ` (${criterion.note})` : ""}`;
+    return {
+      criterion: { ...criterion, result: "not_assessable", note: `${comparison}; the reading is uncertain, so the rule is not applied.` },
+      finding: "to_confirm",
+    };
+  }
+  return { criterion, finding };
+}
+
+function rawFieldCriterion(
+  key: string,
+  field: DocumentExtraction["fields"][number],
+  submission: Submission,
+  uncertainFinding: Finding,
+): { criterion?: Criterion; finding: Finding } {
   switch (key) {
     case "patient_name": {
       const expected = fold(`${answerText(submission, "child_first_name")} ${answerText(submission, "child_last_name")}`);
@@ -426,16 +465,26 @@ function fieldCriterion(
         finding: age === null ? "to_confirm" : met ? uncertainFinding : "conflicting",
       };
     }
-    case "referring_provider":
+    case "referring_provider": {
+      const marked = providerRoleMarked(field.value, field.quote);
       return {
-        criterion: {
-          id: "provider_named",
-          label: "Referral names a referring provider",
-          rule: "A provider name appears on the letter.",
-          result: field.value.trim() ? "met" : "not_met",
-        },
-        finding: uncertainFinding,
+        criterion: marked
+          ? {
+              id: "provider_named",
+              label: "Referral names a referring provider",
+              rule: "A name on the letter is marked as the provider on its line: \"Referring provider:\" or \"Dr.\" before it, or a credential (MD, DO, NP, PhD) after it.",
+              result: "met",
+            }
+          : {
+              id: "provider_role_to_confirm",
+              label: "Role to confirm by the reviewer",
+              rule: "The value is found in the document; nothing on its line marks it as the provider (no \"Referring provider:\", no \"Dr.\", no credential). Whose name it is, the code does not establish.",
+              result: "not_assessable",
+              note: `"${field.value}" is in the passage; its role is not marked there.`,
+            },
+        finding: marked ? uncertainFinding : "to_confirm",
       };
+    }
     case "service_requested":
       return {
         criterion: {
@@ -503,8 +552,38 @@ function extractionPropositions(submission: Submission, draft: Draft, now: strin
     const group = groupOfItem(item.id);
     const fields = [...extraction.fields].sort((a, b) => FIELD_ORDER.indexOf(a.key) - FIELD_ORDER.indexOf(b.key));
     for (const field of fields) {
-      const { criterion, finding } = fieldCriterion(field.key, field, submission);
       const id = `field:${slot.mediaId}:${field.key}`;
+      if (field.conflict && field.conflict.length > 0) {
+        // The draft proposed more than one value for this key. Neither is chosen: both are shown, with their passages, and the reviewer picks.
+        const all = [field, ...field.conflict];
+        const statement = `To confirm: the draft proposed ${all.length} values for this field, ${all.map((v) => `"${v.value}" (page ${v.page})`).join(" and ")}. Neither is taken.`;
+        out.push(
+          keyed({
+            id,
+            group,
+            label: field.label,
+            statement,
+            nature: "rule",
+            evidence: all.map((v) => ({ kind: "document" as const, mediaId: slot.mediaId!, page: v.page, quote: v.quote })),
+            finding: "to_confirm",
+            criterion: {
+              id: "conflicting_extraction",
+              label: "One value for the field",
+              rule: "The draft must give one value per field. Two different values, each in its passage, are shown side by side and neither is established.",
+              result: "not_assessable",
+              note: all.map((v) => `"${v.value}" quoted as "${v.quote}"`).join("; "),
+            },
+            state: "proposed",
+            history: [{ statement, by: "rule", at: now, version }],
+            dependsOn: [],
+            inRequest: false,
+            checked: all.flatMap((v) => v.checked),
+            details: { values: all.map((v) => v.value) },
+          }),
+        );
+        continue;
+      }
+      const { criterion, finding } = fieldCriterion(field.key, field, submission);
       out.push(
         keyed({
           id,
@@ -514,7 +593,7 @@ function extractionPropositions(submission: Submission, draft: Draft, now: strin
           nature: "extraction",
           evidence: [{ kind: "document", mediaId: slot.mediaId, page: field.page, quote: field.quote }],
           finding,
-          criterion: field.uncertain && criterion ? { ...criterion, note: [criterion.note, `Uncertain: ${field.uncertain}`].filter(Boolean).join(" ") } : criterion,
+          criterion: field.uncertain && criterion ? { ...criterion, note: [criterion.note, `Uncertain, in the model's words: ${field.uncertain}`].filter(Boolean).join(" ") } : criterion,
           state: "proposed",
           history: [{ statement: field.value, by: "ai", at: now, version }],
           dependsOn: [],
@@ -626,6 +705,7 @@ function withheldPropositions(submission: Submission, draft: Draft, now: string,
         history: [{ statement, by: "rule", at: now, version }],
         dependsOn: [],
         inRequest: false,
+        details: { reason: [w.reason] },
       }),
     );
   }
@@ -724,16 +804,21 @@ function recordingPropositions(submission: Submission, draft: Draft, now: string
       const open = claim.uncertain || claim.unresolved;
       const finding: Finding = open ? "to_confirm" : claim.key === "days_that_do_not_work" ? "negative" : "present";
       const notes = [claim.uncertain ? `Uncertain, in the model's words: ${claim.uncertain}` : "", claim.unresolved ? `Not established by the code: ${claim.unresolved}` : ""].filter(Boolean);
+      const named = [
+        claim.days.length > 0 ? `${claim.days.map((d) => optionLabel("en", d)).join(", ")} named in the spoken clause with no negation in that clause` : "",
+        claim.earliestHour !== null ? `${clockLabel(claim.earliestHour)} named with AM or PM and "from"` : "",
+      ].filter(Boolean);
       const criterion: Criterion | undefined =
         claim.key === "days_that_work" || claim.key === "time_window"
           ? {
-              id: "availability_stated",
-              label: "Availability stated",
-              rule: "At least one day or time window is stated by the parent, and established from the spoken words.",
-              result: open ? "not_assessable" : claim.days.length > 0 || claim.earliestHour !== null ? "met" : "not_assessable",
-              note: notes.length > 0 ? notes.join(" ") : undefined,
+              id: "availability_to_confirm",
+              label: "Availability: named, not established",
+              rule: "What the parent said about days and hours is quoted and located in the recording. Whether it works for the family is not established by the code: the reviewer confirms it against the recording.",
+              result: "not_assessable",
+              note: [...notes, ...named].join(" ") || undefined,
             }
           : undefined;
+      const denies = claim.denies ?? { days: [], hours: [], places: [] };
       out.push(
         keyed({
           id: `claim:${mediaId}:${claim.key}:${index}`,
@@ -758,6 +843,9 @@ function recordingPropositions(submission: Submission, draft: Draft, now: string
             hour: claim.earliestHour !== null ? [String(claim.earliestHour)] : [],
             place: claim.location ? [claim.location] : [],
             unresolved: claim.unresolved ? [claim.unresolved] : [],
+            deniedDays: [...denies.days],
+            deniedHours: denies.hours.map(String),
+            deniedPlaces: [...denies.places],
           },
         }),
       );
@@ -768,8 +856,20 @@ function recordingPropositions(submission: Submission, draft: Draft, now: string
 
 const place = (value: string | null) => (value === "home" ? "sessions at home" : value === "center" ? "sessions at the center" : "either place");
 
-const UNCERTAIN_RULE = "A statement the model marks uncertain, or an hour or place the code could not establish from the spoken words, is to confirm: never an agreement.";
+const TO_CONFIRM_RULE = "Anything else, what seems to match included, is left to the reviewer: the code establishes no availability from words.";
 
+/** A reason ends the sentence it is put in: no period of its own. */
+const unDot = (text: string) => text.replace(/\.\s*$/, "");
+/** A reason that opens a sentence. */
+const sentence = (text: string) => `${unDot(text).charAt(0).toUpperCase()}${unDot(text).slice(1)}.`;
+
+/**
+ * The three cross-checks between the form and the recording. Two findings
+ * only: "Sources disagree" when the recorded answer, in the clause of the
+ * quoted words, explicitly negates a day, a start hour or a place the form
+ * affirms; "To confirm" for everything else, what seems to match included.
+ * The code never writes that the two sources agree.
+ */
 function crossCheckPropositions(submission: Submission, draft: Draft, recordingProps: Proposition[], now: string, version: number): Proposition[] {
   const out: Proposition[] = [];
   const prompt = promptQuestions(TEMPLATE)[0];
@@ -777,9 +877,12 @@ function crossCheckPropositions(submission: Submission, draft: Draft, recordingP
   const review = slot?.mediaId ? draft.recordings.find((r) => r.mediaId === slot.mediaId) : undefined;
   if (!review || review.transcript.unusable) return out;
 
+  type Claim = (typeof review.claims)[number];
   const claimsOf = (key: string) => review.claims.filter((c) => c.key === key);
-  /** The proposition ids of every claim of these keys: all of them are dependencies, not the first one only. */
-  const propIdsOf = (...keys: string[]) => recordingProps.filter((p) => keys.some((key) => p.id.startsWith(`claim:${review.mediaId}:${key}:`))).map((p) => p.id);
+  const deniesOf = (c: Claim) => c.denies ?? { days: [], hours: [], places: [] };
+  /** The proposition ids of these claims: every claim a cross-check reads is a dependency, not the first one only. */
+  const idsOf = (claims: Claim[]) =>
+    claims.map((c) => recordingProps.find((p) => p.id === `claim:${review.mediaId}:${c.key}:${review.claims.indexOf(c)}`)?.id).filter((id): id is string => !!id);
   const audioOf = (claims: typeof review.claims): Evidence[] => {
     const seen = new Set<string>();
     const evidence: Evidence[] = [];
@@ -795,18 +898,26 @@ function crossCheckPropositions(submission: Submission, draft: Draft, recordingP
     const notes = claims.filter((c) => c.uncertain).map((c) => `"${c.label}" is marked uncertain by the model: ${c.uncertain}`);
     return notes.length > 0 ? notes.join(" ") : null;
   };
+  const quoteOf = (claims: Claim[], test: (c: Claim) => boolean): string => {
+    const c = claims.find(test);
+    return c ? `"${c.quote}"` : "the recorded answer";
+  };
 
   const formDays = answerList(submission, "preferred_days");
   const positive = claimsOf("days_that_work");
   const negative = claimsOf("days_that_do_not_work");
+  // Every statement that names a day, or whose clause denies one, is read by this cross-check.
+  const others = review.claims.filter((c) => !positive.includes(c) && !negative.includes(c) && deniesOf(c).days.length > 0);
+  const dayClaims = [...negative, ...positive, ...others];
   const works = [...new Set(positive.flatMap((c) => c.days))];
   const doesNot = [...new Set(negative.flatMap((c) => c.days))];
-  if (works.length > 0 || doesNot.length > 0) {
-    const contradicted = formDays.filter((d) => doesNot.includes(d as Day));
+  const deniedDays = [...new Set(dayClaims.flatMap((c) => deniesOf(c).days))];
+  if (works.length > 0 || doesNot.length > 0 || deniedDays.length > 0) {
+    const contradicted = formDays.filter((d) => deniedDays.includes(d as Day));
     const unmentioned = formDays.filter((d) => !works.includes(d as Day) && !doesNot.includes(d as Day));
     const extra = works.filter((d) => !formDays.includes(d));
-    const evidence: Evidence[] = [{ kind: "form", questionId: "preferred_days", value: dayList(formDays) || "none" }, ...audioOf([...negative, ...positive])];
-    const uncertain = uncertainNote([...positive, ...negative]);
+    const evidence: Evidence[] = [{ kind: "form", questionId: "preferred_days", value: dayList(formDays) || "none" }, ...audioOf(dayClaims)];
+    const uncertain = uncertainNote(dayClaims);
     const base = {
       id: "xcheck:days",
       group: "cross_checks" as const,
@@ -814,73 +925,49 @@ function crossCheckPropositions(submission: Submission, draft: Draft, recordingP
       nature: "rule" as const,
       evidence,
       state: "proposed" as const,
-      dependsOn: propIdsOf("days_that_work", "days_that_do_not_work"),
-      details: { formDays, works, doesNot, contradicted, unmentioned },
+      dependsOn: idsOf(dayClaims),
+      details: { formDays, works, doesNot, contradicted, unmentioned, deniedDays },
+      requestable: "confirm" as const,
+      inRequest: false,
     };
-    const criterionLabel = "Form and recorded answer agree on days";
-    const rule = `Every day listed on the form is stated as working in the recording, and none is stated as not working. A day the recording does not mention is not an agreement. ${UNCERTAIN_RULE}`;
+    const criterionLabel = "Days: the sources disagree, or the reviewer confirms";
+    const rule = `Sources disagree when the recorded answer, in the clause of the quoted words, negates a day the form lists. ${TO_CONFIRM_RULE}`;
     if (contradicted.length > 0) {
-      const statement = `To confirm with the family. The form lists ${dayList(formDays)}; the recorded answer says ${dayList(contradicted)} ${contradicted.length > 1 ? "do" : "does"} not work. No day has been chosen.`;
+      const statement = `Sources disagree. The form lists ${dayList(formDays)}; the recorded answer says ${dayList(contradicted)} ${contradicted.length > 1 ? "do" : "does"} not work (${quoteOf(dayClaims, (c) => deniesOf(c).days.some((d) => contradicted.includes(d)))}). No day has been chosen.`;
       out.push(
         keyed({
           ...base,
           statement,
           finding: "conflicting",
-          criterion: { id: "sources_agree_days", label: criterionLabel, rule, result: "not_met", note: [`${dayList(contradicted)} appears in both.`, uncertain].filter(Boolean).join(" ") },
+          criterion: { id: "sources_agree_days", label: criterionLabel, rule, result: "not_met", note: [`${dayList(contradicted)} is listed on the form and negated in the recording.`, uncertain].filter(Boolean).join(" ") },
           history: [{ statement, by: "rule", at: now, version }],
-          requestable: "confirm",
-          inRequest: false,
-        }),
-      );
-    } else if (formDays.length === 0) {
-      const statement = `To confirm with the family. The form lists no day; the recorded answer says ${dayList(works) || "no day"} ${works.length === 1 ? "works" : "work"}${doesNot.length ? ` and ${dayList(doesNot)} ${doesNot.length > 1 ? "do" : "does"} not` : ""}. No day has been chosen.`;
-      out.push(
-        keyed({
-          ...base,
-          statement,
-          finding: "to_confirm",
-          criterion: { id: "sources_agree_days", label: criterionLabel, rule, result: "not_assessable", note: ["The form names no day to compare with.", uncertain].filter(Boolean).join(" ") },
-          history: [{ statement, by: "rule", at: now, version }],
-          requestable: "confirm",
-          inRequest: false,
-        }),
-      );
-    } else if (unmentioned.length > 0) {
-      const statement = `To confirm with the family. The form lists ${dayList(formDays)}; the recorded answer mentions ${dayList(works) || "no day"} as working${doesNot.length ? ` and ${dayList(doesNot)} as not working` : ""}, and says nothing about ${dayList(unmentioned)}. No day has been chosen.`;
-      out.push(
-        keyed({
-          ...base,
-          statement,
-          finding: "to_confirm",
-          criterion: { id: "sources_agree_days", label: criterionLabel, rule, result: "not_assessable", note: [`${dayList(unmentioned)} ${unmentioned.length > 1 ? "are" : "is"} not mentioned in the recording.`, uncertain].filter(Boolean).join(" ") },
-          history: [{ statement, by: "rule", at: now, version }],
-          requestable: "confirm",
-          inRequest: false,
-        }),
-      );
-    } else if (uncertain) {
-      const statement = `To confirm with the family. The form lists ${dayList(formDays)} and the recorded answer names the same days, but the model marked its reading of the recording as uncertain. No day has been chosen.`;
-      out.push(
-        keyed({
-          ...base,
-          statement,
-          finding: "to_confirm",
-          criterion: { id: "sources_agree_days", label: criterionLabel, rule, result: "not_assessable", note: uncertain },
-          history: [{ statement, by: "rule", at: now, version }],
-          requestable: "confirm",
-          inRequest: false,
         }),
       );
     } else {
-      const statement = `The form and the recorded answer agree: ${dayList(formDays)}.${extra.length ? ` The recorded answer also mentions ${dayList(extra)}, which the form does not list.` : ""}`;
+      const recorded = [
+        works.length > 0 ? `names ${dayList(works)} as working` : "",
+        doesNot.length > 0 ? `${dayList(doesNot)} as not working` : "",
+      ]
+        .filter(Boolean)
+        .join(" and ");
+      const said = formDays.length === 0 ? `The form lists no day; the recorded answer ${recorded || "names no day"}.` : `The form lists ${dayList(formDays)}; the recorded answer ${recorded || "names no day"}${unmentioned.length > 0 ? `, and says nothing about ${dayList(unmentioned)}` : ""}.`;
+      const statement = `To confirm. ${said} The code does not settle this: confirm it against the recording, or ask the family. No day has been chosen.`;
+      const note = [
+        formDays.length === 0 ? "The form names no day to compare with." : "",
+        unmentioned.length > 0 ? `${dayList(unmentioned)} ${unmentioned.length > 1 ? "are" : "is"} not mentioned in the recording.` : "",
+        extra.length > 0 ? `${dayList(extra)} mentioned in the recording only.` : "",
+        uncertain ?? "",
+        "Named in the recording is not established as working.",
+      ]
+        .filter(Boolean)
+        .join(" ");
       out.push(
         keyed({
           ...base,
           statement,
-          finding: "consistent",
-          criterion: { id: "sources_agree_days", label: criterionLabel, rule, result: "met", note: extra.length ? `${dayList(extra)} mentioned in the recording only.` : undefined },
+          finding: "to_confirm",
+          criterion: { id: "sources_agree_days", label: criterionLabel, rule, result: "not_assessable", note },
           history: [{ statement, by: "rule", at: now, version }],
-          inRequest: false,
         }),
       );
     }
@@ -888,92 +975,126 @@ function crossCheckPropositions(submission: Submission, draft: Draft, recordingP
 
   const times = claimsOf("time_window");
   const formTime = answerText(submission, "preferred_time");
-  if (times.length > 0 && formTime) {
-    const formHour = FORM_TIME_HOUR[formTime] ?? null;
+  const formHour = formTime ? (FORM_TIME_HOUR[formTime] ?? null) : null;
+  const timeOthers = formHour === null ? [] : review.claims.filter((c) => c.key !== "time_window" && deniesOf(c).hours.includes(formHour));
+  const timeClaims = [...times, ...timeOthers];
+  if (timeClaims.length > 0 && formTime) {
     const formLabel = optionLabel("en", formTime).toLowerCase();
     const hours = [...new Set(times.map((c) => c.earliestHour).filter((h): h is number => h !== null))];
-    const uncertain = uncertainNote(times);
+    const silent = times.filter((c) => c.earliestHour === null);
+    const uncertain = uncertainNote(timeClaims);
     const unresolved = times.map((c) => c.unresolved).filter((x): x is string => !!x);
-    const hour = hours.length === 1 && !uncertain && unresolved.length === 0 ? hours[0] : null;
+    const denied = formHour !== null && timeClaims.some((c) => deniesOf(c).hours.includes(formHour));
+    // One hour, named by every time statement, none uncertain: quoted in the question to the family, never compared for an agreement.
+    const hour = hours.length === 1 && silent.length === 0 && !uncertain ? hours[0] : null;
     const reason =
       uncertain ??
-      (unresolved.length > 0 ? `In the recorded answer, ${unresolved.join(" ")}` : null) ??
-      (hours.length > 1 ? `The recorded answer names more than one hour (${hours.map(clockLabel).join(", ")}).` : null) ??
-      (hours.length === 0 ? "The recorded answer gives no comparable hour." : null) ??
-      (formHour === null ? "The form option has no hour to compare with." : null);
-    const agree = hour !== null && formHour !== null && hour === formHour;
-    const statement =
-      reason !== null
-        ? `To confirm with the family. The form says ${formLabel}; ${reason.charAt(0).toLowerCase()}${reason.slice(1)}`
-        : agree
-          ? `The form and the recorded answer agree: ${formLabel}.`
-          : `To confirm with the family. The form says ${formLabel}; the recorded answer says from ${clockLabel(hour!)}.`;
-    out.push(
-      keyed({
-        id: "xcheck:time",
-        group: "cross_checks",
-        label: "Time of day",
-        statement,
-        nature: "rule",
-        evidence: [{ kind: "form", questionId: "preferred_time", value: optionLabel("en", formTime) }, ...audioOf(times)],
-        finding: reason !== null ? "to_confirm" : agree ? "consistent" : "conflicting",
-        criterion: {
-          id: "sources_agree_time",
-          label: "Form and recorded answer agree on the time of day",
-          rule: `The earliest hour established from the recording (value, AM or PM, and "from" all in the spoken words) equals the hour the form option starts at. ${UNCERTAIN_RULE}`,
-          result: reason !== null ? "not_assessable" : agree ? "met" : "not_met",
-          note: reason ?? undefined,
-        },
-        state: "proposed",
-        history: [{ statement, by: "rule", at: now, version }],
-        dependsOn: propIdsOf("time_window"),
-        requestable: agree ? undefined : "confirm",
-        inRequest: false,
-        details: { formTime: [formTime], recordedHour: hour !== null ? [String(hour)] : [] },
-      }),
-    );
+      (unresolved.length > 0 ? `in the recorded answer, ${unresolved.join(" ")}` : null) ??
+      (hours.length > 1 ? `the recorded answer names more than one hour (${hours.map(clockLabel).join(", ")})` : null) ??
+      (hours.length === 0 ? "the recorded answer names no hour the code can read" : null) ??
+      (silent.length > 0 ? `one recorded statement about the time names no hour (${silent.map((c) => `"${c.quote}"`).join(", ")})` : null) ??
+      (formHour === null ? "the form option has no hour to compare with" : null);
+    const base = {
+      id: "xcheck:time",
+      group: "cross_checks" as const,
+      label: "Time of day",
+      nature: "rule" as const,
+      evidence: [{ kind: "form" as const, questionId: "preferred_time", value: optionLabel("en", formTime) }, ...audioOf(timeClaims)],
+      state: "proposed" as const,
+      dependsOn: idsOf(timeClaims),
+      requestable: "confirm" as const,
+      inRequest: false,
+      details: { formTime: [formTime], recordedHour: hour !== null ? [String(hour)] : [], deniedHours: denied && formHour !== null ? [String(formHour)] : [] },
+    };
+    const criterionLabel = "Time: the sources disagree, or the reviewer confirms";
+    const rule = `Sources disagree when the recorded answer, in the clause of the quoted words, negates the hour the form option starts at as a start. ${TO_CONFIRM_RULE}`;
+    if (denied && formHour !== null) {
+      const statement = `Sources disagree. The form says ${formLabel}; the recorded answer negates from ${clockLabel(formHour)} (${quoteOf(timeClaims, (c) => deniesOf(c).hours.includes(formHour))}). No time has been chosen.`;
+      out.push(
+        keyed({
+          ...base,
+          statement,
+          finding: "conflicting",
+          criterion: { id: "sources_agree_time", label: criterionLabel, rule, result: "not_met", note: [`${clockLabel(formHour)} is the start of the form option and is negated in the recording.`, uncertain].filter(Boolean).join(" ") },
+          history: [{ statement, by: "rule", at: now, version }],
+        }),
+      );
+    } else {
+      const said = hour !== null ? `the recorded answer says from ${clockLabel(hour)}` : unDot(reason ?? "the recorded answer gives no hour");
+      const statement = `To confirm. The form says ${formLabel}; ${said}. The code does not settle this: confirm it against the recording, or ask the family.`;
+      out.push(
+        keyed({
+          ...base,
+          statement,
+          finding: "to_confirm",
+          criterion: {
+            id: "sources_agree_time",
+            label: criterionLabel,
+            rule,
+            result: "not_assessable",
+            note: [reason ? sentence(reason) : `${clockLabel(hour!)} is named in the recording with AM or PM and "from".`, "Named is not established as working."].join(" "),
+          },
+          history: [{ statement, by: "rule", at: now, version }],
+        }),
+      );
+    }
   }
 
   const locations = claimsOf("location_preference");
   const formLocation = answerText(submission, "location");
-  if (locations.length > 0 && formLocation) {
+  const formPlace = formLocation === "home" || formLocation === "center" ? formLocation : null;
+  const placeOthers = formPlace === null ? [] : review.claims.filter((c) => c.key !== "location_preference" && deniesOf(c).places.includes(formPlace));
+  const placeClaims = [...locations, ...placeOthers];
+  if (placeClaims.length > 0 && formLocation) {
     const places = [...new Set(locations.map((c) => c.location).filter((x): x is "home" | "center" | "either" => x !== null))];
-    const uncertain = uncertainNote(locations);
+    const uncertain = uncertainNote(placeClaims);
     const recorded = places.length === 1 && !uncertain ? places[0] : null;
-    const reason = uncertain ?? (places.length > 1 ? `The recorded answer names more than one place (${places.join(", ")}).` : null) ?? (places.length === 0 ? "The recorded answer names no clear place." : null);
-    const compatible = recorded !== null && (formLocation === "either" || formLocation === recorded);
-    const statement =
-      reason !== null
-        ? `To confirm with the family. The form says ${place(formLocation)}; ${reason.charAt(0).toLowerCase()}${reason.slice(1)}`
-        : compatible
-          ? formLocation === "either"
-            ? `The form allows either place; the parent prefers ${place(recorded)}.`
-            : `The form and the recorded answer agree: ${place(formLocation)}.`
-          : `To confirm with the family. The form says ${place(formLocation)}; the recorded answer prefers ${place(recorded)}.`;
-    out.push(
-      keyed({
-        id: "xcheck:location",
-        group: "cross_checks",
-        label: "Where sessions take place",
-        statement,
-        nature: "rule",
-        evidence: [{ kind: "form", questionId: "location", value: optionLabel("en", formLocation) }, ...audioOf(locations)],
-        finding: reason !== null ? "to_confirm" : compatible ? "consistent" : "conflicting",
-        criterion: {
-          id: "sources_agree_location",
-          label: "Form and recorded answer are compatible on the place",
-          rule: `The recorded preference, named without a negation in the spoken words, is allowed by the form answer. No place in the recording is not an agreement. ${UNCERTAIN_RULE}`,
-          result: reason !== null ? "not_assessable" : compatible ? "met" : "not_met",
-          note: reason ?? undefined,
-        },
-        state: "proposed",
-        history: [{ statement, by: "rule", at: now, version }],
-        dependsOn: propIdsOf("location_preference"),
-        requestable: compatible ? undefined : "confirm",
-        inRequest: false,
-        details: { formPlace: [formLocation], recordedPlace: recorded ? [recorded] : [] },
-      }),
-    );
+    const denied = formPlace !== null && placeClaims.some((c) => deniesOf(c).places.includes(formPlace));
+    const reason = uncertain ?? (places.length > 1 ? `the recorded answer names more than one place (${places.join(", ")})` : null) ?? (places.length === 0 ? "the recorded answer names no clear place" : null);
+    const base = {
+      id: "xcheck:location",
+      group: "cross_checks" as const,
+      label: "Where sessions take place",
+      nature: "rule" as const,
+      evidence: [{ kind: "form" as const, questionId: "location", value: optionLabel("en", formLocation) }, ...audioOf(placeClaims)],
+      state: "proposed" as const,
+      dependsOn: idsOf(placeClaims),
+      requestable: "confirm" as const,
+      inRequest: false,
+      details: { formPlace: [formLocation], recordedPlace: recorded ? [recorded] : [], deniedPlaces: denied ? [formLocation] : [] },
+    };
+    const criterionLabel = "Place: the sources disagree, or the reviewer confirms";
+    const rule = `Sources disagree when the recorded answer, in the clause of the quoted words, negates the place the form names. ${TO_CONFIRM_RULE}`;
+    if (denied) {
+      const statement = `Sources disagree. The form says ${place(formLocation)}; the recorded answer negates ${place(formLocation)} (${quoteOf(placeClaims, (c) => deniesOf(c).places.includes(formPlace!))}). No place has been chosen.`;
+      out.push(
+        keyed({
+          ...base,
+          statement,
+          finding: "conflicting",
+          criterion: { id: "sources_agree_location", label: criterionLabel, rule, result: "not_met", note: [`${place(formLocation)} is named on the form and negated in the recording.`, uncertain].filter(Boolean).join(" ") },
+          history: [{ statement, by: "rule", at: now, version }],
+        }),
+      );
+    } else {
+      const said = recorded !== null ? `the recorded answer names ${place(recorded)}` : unDot(reason ?? "the recorded answer names no place");
+      const statement = `To confirm. The form ${formLocation === "either" ? "allows either place" : `says ${place(formLocation)}`}; ${said}. The code does not settle this: confirm it against the recording, or ask the family.`;
+      out.push(
+        keyed({
+          ...base,
+          statement,
+          finding: "to_confirm",
+          criterion: {
+            id: "sources_agree_location",
+            label: criterionLabel,
+            rule,
+            result: "not_assessable",
+            note: [reason ? sentence(reason) : `${place(recorded!)} named in the spoken clause with no negation in that clause.`, "Named is not established as preferred."].join(" "),
+          },
+          history: [{ statement, by: "rule", at: now, version }],
+        }),
+      );
+    }
   }
   return out;
 }
@@ -1020,21 +1141,27 @@ export function requestText(submission: Submission, propositions: Proposition[],
     lines.push("", confirms.length > 1 ? t.confirmIntroPlural : t.confirmIntro);
     for (const item of confirms) {
       const prop = propositions.find((p) => p.id === item.propositionId);
-      const details = prop?.details ?? {};
+      // A question whose proposition the current draft no longer carries keeps the facts it was composed from: it stays readable, and open.
+      const details = prop?.details ?? item.facts ?? {};
       if (item.propositionId === "xcheck:days") {
         const formDays = dayList(details.formDays ?? [], lang);
         if ((details.contradicted ?? []).length > 0) lines.push(`- ${t.confirmDays(formDays, dayList(details.contradicted ?? [], lang))}`);
         else if (formDays) lines.push(`- ${t.confirmDaysUnmentioned(formDays, dayList(details.works ?? [], lang))}`);
         else lines.push(`- ${t.confirmDaysNone(dayList(details.works ?? [], lang))}`);
       } else if (item.propositionId === "xcheck:time") {
-        const formTime = t.timePhrase[details.formTime?.[0] ?? ""] ?? optionLabel(lang, details.formTime?.[0] ?? "").toLowerCase();
+        const formTimeId = details.formTime?.[0] ?? "";
+        const formTime = t.timePhrase[formTimeId] ?? optionLabel(lang, formTimeId).toLowerCase();
         const hour = details.recordedHour?.[0] ? Number(details.recordedHour[0]) : null;
         const clock = hour === null ? "" : lang === "es" ? `${hour}:00` : `${hour % 12 === 0 ? 12 : hour % 12}:00 ${hour < 12 ? "am" : "pm"}`;
-        lines.push(`- ${hour !== null ? t.confirmTime(formTime, clock) : t.confirmTimeUnknown(formTime)}`);
+        // The recorded hour is quoted back only when it differs from the form's: when it is the same, the question is simply asked.
+        const differs = hour !== null && hour !== (FORM_TIME_HOUR[formTimeId] ?? null);
+        lines.push(`- ${differs ? t.confirmTime(formTime, clock) : t.confirmTimeUnknown(formTime)}`);
       } else if (item.propositionId === "xcheck:location") {
-        const formPlace = optionLabel(lang, details.formPlace?.[0] ?? "").toLowerCase();
+        const formPlaceId = details.formPlace?.[0] ?? "";
+        const formPlace = optionLabel(lang, formPlaceId).toLowerCase();
         const recorded = details.recordedPlace?.[0];
-        lines.push(`- ${recorded ? t.confirmLocation(formPlace, optionLabel(lang, recorded).toLowerCase()) : t.confirmLocationUnknown(formPlace)}`);
+        const differs = !!recorded && recorded !== formPlaceId;
+        lines.push(`- ${differs ? t.confirmLocation(formPlace, optionLabel(lang, recorded).toLowerCase()) : t.confirmLocationUnknown(formPlace)}`);
       } else {
         lines.push(`- ${t.confirmSchedule}`);
       }
@@ -1044,24 +1171,80 @@ export function requestText(submission: Submission, propositions: Proposition[],
   return lines.join("\n");
 }
 
+export interface RequestContext {
+  /** Who receives it (name, email, phone, language of contact), which child (first and last name), which file. */
+  recipient: string;
+  /** Which items, of which kind, and whether their basis is still there. */
+  items: string;
+  /** The facts asked about: the structured details and the current statement of every proposition the request cites. */
+  facts: string;
+  key: string;
+}
+
 /**
  * What the request is about: who receives it, which child, in which language,
  * which items and of which kind, and the facts asked about. The reviewer's
- * corrected text and the approval of the text hold only for this context.
+ * corrected text and the approval of the text hold only for this context,
+ * and each part is digested apart so a change can be named.
  */
-export function requestContextKey(submission: Submission, propositions: Proposition[], items: RequestItem[]): string {
-  const open = items.filter((i) => !i.satisfiedAt).map((i) => ({ id: i.propositionId, kind: i.kind })).sort((a, b) => (a.id < b.id ? -1 : 1));
-  return sha256Hex(
+export function requestContext(submission: Submission, propositions: Proposition[], items: RequestItem[]): RequestContext {
+  const open = items.filter((i) => !i.satisfiedAt).map((i) => ({ id: i.propositionId, kind: i.kind, basisMissing: Boolean(i.basisMissing) })).sort((a, b) => (a.id < b.id ? -1 : 1));
+  const recipient = sha256Hex(
     canonical({
       language: requestLanguage(submission),
-      recipient: answerText(submission, "guardian_name"),
-      child: answerText(submission, "child_first_name"),
+      recipient: {
+        name: answerText(submission, "guardian_name"),
+        email: answerText(submission, "email"),
+        phone: answerText(submission, "phone"),
+        contactLanguage: answerText(submission, "contact_language"),
+      },
+      child: { first: answerText(submission, "child_first_name"), last: answerText(submission, "child_last_name") },
       code: submission.reference,
-      items: open,
-      facts: open.map((i) => propositions.find((p) => p.id === i.id)?.details ?? null),
     }),
   );
+  const itemsKey = sha256Hex(canonical(open));
+  const facts = sha256Hex(
+    canonical(
+      open.map((i) => {
+        const p = propositions.find((q) => q.id === i.id);
+        return p ? { details: p.details ?? null, statement: p.statement } : null;
+      }),
+    ),
+  );
+  return { recipient, items: itemsKey, facts, key: sha256Hex(`${recipient}:${itemsKey}:${facts}`) };
 }
+
+export function requestContextKey(submission: Submission, propositions: Proposition[], items: RequestItem[]): string {
+  return requestContext(submission, propositions, items).key;
+}
+
+/** What an item rests on: the document or recording slot as the family sent it, or the source key of the proposition. */
+function basisOf(p: Proposition, submission: Submission): string {
+  if (p.id.startsWith("doc:")) {
+    const slot = submission.documents[p.id.slice(4)];
+    return slot ? `${slot.status}:${slot.mediaId ?? ""}:${slot.receivedAt ?? ""}` : "missing";
+  }
+  if (p.id.startsWith("rec:")) {
+    const slot = submission.recordings[p.id.slice(4).split(":")[0]];
+    return slot ? `${slot.status}:${slot.mediaId ?? ""}` : "missing";
+  }
+  return p.sourceKey;
+}
+
+/** The slot an item was composed for, as the family has it now: a change here is a piece the family sent. */
+function slotBasisNow(item: RequestItem, submission: Submission): string | null {
+  if (item.propositionId.startsWith("doc:")) {
+    const slot = submission.documents[item.propositionId.slice(4)];
+    return slot ? `${slot.status}:${slot.mediaId ?? ""}:${slot.receivedAt ?? ""}` : "missing";
+  }
+  if (item.propositionId.startsWith("rec:")) {
+    const slot = submission.recordings[item.propositionId.slice(4).split(":")[0]];
+    return slot ? `${slot.status}:${slot.mediaId ?? ""}` : "missing";
+  }
+  return null;
+}
+
+const BASIS_MISSING = "The draft no longer carries this item; review it";
 
 interface ComposedRequest {
   request?: RequestDraft;
@@ -1071,25 +1254,48 @@ interface ComposedRequest {
   editedDropped?: { text: string; because: string };
 }
 
+/** Names what changed in the context of a request, part by part. */
+function describeContextChange(previous: RequestDraft | undefined, next: RequestContext): string {
+  if (!previous) return "";
+  const parts = previous.contextParts;
+  if (!parts) return "context changed: the recipient, the child, the language, the items or the facts asked about changed";
+  const changed: string[] = [];
+  if (parts.recipient !== next.recipient) changed.push("context changed: the recipient, the child or the language changed");
+  if (parts.items !== next.items) changed.push("context changed: the items asked for changed");
+  if (parts.facts !== next.facts) changed.push("fact corrected: a fact asked about was corrected or recomputed");
+  return changed.join("; ");
+}
+
 function composeRequest(submission: Submission, propositions: Proposition[], previous: RequestDraft | undefined, now: string): ComposedRequest {
   const items: RequestItem[] = [];
   for (const p of propositions) {
     if (p.inRequest && p.requestable) {
       const kept = previous?.items.find((i) => i.propositionId === p.id);
+      const basis = basisOf(p, submission);
+      const facts = p.details;
       // An item asked for as missing and received unreadable is another request: same id, new kind.
-      items.push(kept && !kept.satisfiedAt && kept.kind === p.requestable ? kept : { propositionId: p.id, kind: p.requestable });
+      items.push(kept && !kept.satisfiedAt && kept.kind === p.requestable ? { ...kept, basis, facts, basisMissing: undefined } : { propositionId: p.id, kind: p.requestable, basis, facts });
     }
   }
-  // Items no longer asked for stay in the record, marked satisfied.
+  // An item the propositions no longer ask for leaves the request only when the family sent the piece (the slot changed) or the
+  // reviewer resolved it. A draft that stopped carrying it does not answer the question: the item stays open, its basis missing.
   for (const item of previous?.items ?? []) {
-    if (!items.some((i) => i.propositionId === item.propositionId)) items.push(item.satisfiedAt ? item : { ...item, satisfiedAt: now });
+    if (items.some((i) => i.propositionId === item.propositionId)) continue;
+    if (item.satisfiedAt) {
+      items.push(item);
+      continue;
+    }
+    const slotNow = slotBasisNow(item, submission);
+    const familySent = slotNow !== null && item.basis !== undefined && slotNow !== item.basis;
+    items.push(familySent ? { ...item, satisfiedAt: now, satisfiedBy: "family", basisMissing: undefined } : { ...item, basisMissing: item.basisMissing ?? { at: now, because: BASIS_MISSING } });
   }
   if (items.length === 0) return {};
   // Nothing left to ask: the request is done. Its last text and status stand; nothing is composed again.
   if (previous && items.every((i) => i.satisfiedAt)) return { request: { ...previous, items } };
-  const contextKey = requestContextKey(submission, propositions, items);
+  const context = requestContext(submission, propositions, items);
+  const contextKey = context.key;
   const sameContext = previous?.contextKey === contextKey;
-  const contextChange = previous && !sameContext ? "the recipient, the child, the language, the items or the facts asked about changed" : "";
+  const contextChange = previous && !sameContext ? describeContextChange(previous, context) : "";
   const composed = requestText(submission, propositions, items, submission.reference);
   const keepEdit = Boolean(previous?.edited && sameContext);
   const text = keepEdit ? previous!.text : composed;
@@ -1106,6 +1312,7 @@ function composeRequest(submission: Submission, propositions: Proposition[], pre
       items,
       text,
       contextKey,
+      contextParts: { recipient: context.recipient, items: context.items, facts: context.facts },
       status: reopened ? "draft" : (previous?.status ?? "draft"),
       approvedAt: reopened ? undefined : previous?.approvedAt,
       approvedText: previous?.approvedText,
@@ -1188,9 +1395,15 @@ function refreshRequest(state: ReviewState, now: string, because: string): Revie
 
 /* ---------- Building the review ---------- */
 
-/** Where a draft came from, in words: the recorded run, or a live run, with the transcription reused or called. */
+/** True when the run had no recording to transcribe: the extraction was its only call. */
+export function withoutRecording(draft: Draft): boolean {
+  return draft.recordings.length === 0;
+}
+
+/** Where a draft came from, in words: the recorded run, or a live run, with the transcription called, reused, or not needed. */
 export function draftOrigin(draft: Draft): string {
   if (draft.origin !== "live") return "from the recorded run";
+  if (withoutRecording(draft)) return "computed live (extraction called; no recording, so no transcription)";
   return draft.transcriptReused ? "computed live (extraction called; transcription reused from an earlier run of the day)" : "computed live (transcription and extraction both called)";
 }
 
@@ -1373,6 +1586,34 @@ export function editRequest(state: ReviewState, text: string, now: string = new 
   return withStage(next, now, "Request changed.");
 }
 
+/**
+ * The reviewer takes an item out of the request: handled outside the message
+ * (by phone, by hand), or no longer a question. The only way an item closes
+ * without a piece sent by the family. The proposition, if it is still there,
+ * leaves the request and is reviewed on its own; the message is composed
+ * again, and an approved message is a draft again since its text changes.
+ */
+export function resolveRequestItem(state: ReviewState, propositionId: string, note: string, now: string = new Date().toISOString()): ReviewState {
+  const item = state.request?.items.find((i) => i.propositionId === propositionId);
+  if (!state.request || !item) throw new Refused("unknown_proposition", "No such item in the request.");
+  if (item.satisfiedAt) return state;
+  const version = state.version + 1;
+  const items = state.request.items.map((i) => (i.propositionId === propositionId ? { ...i, satisfiedAt: now, satisfiedBy: "reviewer" as const, basisMissing: undefined } : i));
+  const propositions = state.propositions.map((p) => (p.id === propositionId ? { ...p, inRequest: false } : p));
+  const label = state.propositions.find((p) => p.id === propositionId)?.label ?? propositionId;
+  let next: ReviewState = { ...state, request: { ...state.request, items }, propositions, version };
+  next = refreshRequest(next, now, `${label} was resolved by the reviewer`);
+  next = entry(next, {
+    at: now,
+    actor: "reviewer",
+    action: "request_item_resolved",
+    detail: `${label}: taken out of the request by the reviewer${note.trim() ? ` (${note.trim()})` : ""}.${item.basisMissing ? " The draft no longer carried it." : ""}${state.propositions.some((p) => p.id === propositionId) ? " The item is reviewed on its own from here." : ""}`,
+    target: propositionId,
+  });
+  next = detachApproval(next, now, `the request to the family changed after the file was approved (${label} resolved)`);
+  return withStage(next, now, "Request changed.");
+}
+
 export function approveRequest(state: ReviewState, now: string = new Date().toISOString()): ReviewState {
   if (!state.request || state.request.items.every((i) => i.satisfiedAt)) {
     throw new Refused("nothing_to_add", "There is no request to approve.");
@@ -1502,10 +1743,29 @@ function merge(previous: Proposition[], fresh: Proposition[], now: string, becau
   });
 }
 
-/** Rebuilds the propositions and the request for a submission and a draft, keeping the reviewer's work where the source is unchanged. */
+/**
+ * Rebuilds the propositions and the request for a submission and a draft,
+ * keeping the reviewer's work where the source is unchanged. A proposition
+ * that changed or vanished flags every reviewed proposition that rests on it,
+ * as a direct correction does: a cross-check does not stay approved over a
+ * statement that was proposed again.
+ */
 function rebuild(state: ReviewState, submission: Submission, draft: Draft, version: number, now: string, because: string): ReviewState {
   const fresh = buildPropositions(submission, draft, now, version);
-  const propositions = merge(state.propositions, fresh, now, because);
+  const merged = merge(state.propositions, fresh, now, because);
+  const changed = new Map<string, string>();
+  for (const old of state.propositions) {
+    const next = fresh.find((p) => p.id === old.id);
+    if (!next) changed.set(old.id, `${old.label} is no longer in the draft`);
+    else if (next.sourceKey !== old.sourceKey) changed.set(old.id, `${old.label} was proposed again`);
+  }
+  const propositions = merged.map((p) => {
+    if (p.state === "proposed" || p.recheck) return p;
+    const old = state.propositions.find((q) => q.id === p.id);
+    const rests = [...new Set([...p.dependsOn, ...(old?.dependsOn ?? [])])].filter((id) => changed.has(id));
+    if (rests.length === 0) return p;
+    return { ...p, recheck: { because: `${because}: ${rests.map((id) => changed.get(id)).join(", ")}`, at: now } };
+  });
   const next: ReviewState = { ...state, submission, draft, propositions, version };
   return refreshRequest(next, now, because);
 }

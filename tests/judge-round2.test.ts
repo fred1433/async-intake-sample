@@ -4,6 +4,9 @@
  * B01 to B13 (B08 was its own positive control and is not repeated here), C01,
  * C02 and C05. Every test in this file was run red on 1498107 before the
  * correction it names; the output of that run is in the correction report.
+ * Two lines were adapted in the fourth pass, each marked where it stands: A04
+ * (a cross-check is to confirm, never consistent) and the end of A06 (a
+ * corrected fact sends the message back to draft, R3-A06).
  *
  * Three principles they enforce: a model's assumption never becomes a computed
  * agreement; an approval never follows a fact, a recipient or a request type it
@@ -179,7 +182,8 @@ describe("A. approvals that survive a relevant change", () => {
     sub.answers.preferred_days = ["tuesday", "friday"];
     let s = buildReview(sub, d, NOW);
     const days = find(s, "xcheck:days")!;
-    expect(days.finding).toBe("consistent");
+    // "consistent" until the fourth pass; since then the code never affirms an agreement, and this cross-check is to confirm.
+    expect(days.finding).toBe("to_confirm");
     expect(days.statement).toMatch(/Tuesday and Friday/);
     s = approve(s, "xcheck:days", T1);
     const friday = s.propositions.find((p) => p.id.includes(":days_that_work:") && p.statement.includes("Friday"))!;
@@ -219,7 +223,12 @@ describe("A. approvals that survive a relevant change", () => {
     expect(canApproveFile(confirmed).reasons.join(" ")).not.toMatch(/xcheck/);
     const corrected = correct(s, "xcheck:days", "Confirmed by phone: Tuesdays only. Still asked in the message.", T3);
     expect(find(corrected, "xcheck:days")?.recheck).toBeUndefined();
-    expect(isReviewed(find(corrected, "xcheck:days")!, corrected.request)).toBe(true);
+    // Since the fourth pass (R3-A06), correcting a fact the message asks about sends the message back to draft: the item is
+    // reviewed through the message once the message is approved again for the corrected fact.
+    expect(corrected.request?.status).toBe("draft");
+    expect(isReviewed(find(corrected, "xcheck:days")!, corrected.request)).toBe(false);
+    const reapproved = approveRequest(corrected, T3);
+    expect(isReviewed(find(reapproved, "xcheck:days")!, reapproved.request)).toBe(true);
   });
 
   it("A07. the result of a live run started before a reset is not applied to the file built by the reset, same reference, same media", () => {

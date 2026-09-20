@@ -20,6 +20,7 @@ import {
   editRequest,
   focalProposition,
   liveRunExpectation,
+  resolveRequestItem,
   STAGE_LABELS,
 } from "@/lib/engine/review";
 import { Refused, type Draft, type ReviewState } from "@/lib/engine/types";
@@ -184,6 +185,22 @@ export function ReviewApp() {
         }
       } catch (error) {
         setToast({ text: error instanceof Error ? error.message : "Could not correct the request.", tone: "warn" });
+      }
+    },
+    [state, commit],
+  );
+
+  const doResolveItem = useCallback(
+    (propositionId: string) => {
+      try {
+        const next = resolveRequestItem(state, propositionId, "");
+        if (next !== state) {
+          commit(next);
+          const label = state.propositions.find((p) => p.id === propositionId)?.label ?? "Item";
+          setToast({ text: `${label}: taken out of the request. ${next.request?.status === "draft" && state.request?.status === "approved" ? "The request is a draft again." : "The request was composed again."} The journal keeps it.`, tone: "ok" });
+        }
+      } catch (error) {
+        setToast({ text: error instanceof Error ? error.message : "Could not resolve this item.", tone: "warn" });
       }
     },
     [state, commit],
@@ -450,7 +467,7 @@ export function ReviewApp() {
         </p>
       </main>
 
-      <RequestDialog open={showRequest} onOpenChange={setShowRequest} request={state.request} onApprove={doApproveRequest} onEdit={doEditRequest} />
+      <RequestDialog open={showRequest} onOpenChange={setShowRequest} request={state.request} onApprove={doApproveRequest} onEdit={doEditRequest} onResolveItem={doResolveItem} />
       <HelpDialog open={showHelp} onOpenChange={setShowHelp} />
 
       {toast && (

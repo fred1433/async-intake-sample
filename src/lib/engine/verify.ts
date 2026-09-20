@@ -3,23 +3,29 @@
  *
  * A field must quote a passage that exists on the page it names, its value
  * must be in that passage as one contiguous run of words, and a machine-form
- * date must be the date written in the value, on a real calendar. A claim must
- * quote words that exist in the transcript; its audio window is located by the
- * code from those words inside the timestamps the transcription returned, and
- * checked against the length of the recording. The days, hour and place it
- * carries are checked in the source clause the quoted words come from, not
- * only in the words the model chose to quote, so a negation the quote left out
- * still counts. An hour is established only when the words give its value, AM
- * or PM, and "from": anything less is kept as something to confirm and is
- * never compared. A free statement (other) is never assessed: it is listed
- * for the reviewer. Anything that fails is withheld, listed, and never shown
- * as a finding. A claim with no source at all is refused the same way.
+ * date must be the date written in the value, on a real calendar. Two fields
+ * with the same key are one field: merged when they carry the same value,
+ * kept as one field with its conflicting values when they do not. A claim
+ * must quote words that exist in the transcript; its audio window is located
+ * by the code from those words inside the timestamps the transcription
+ * returned, and checked against the length of the recording. The days, hour
+ * and place it carries are checked in the source clause the quoted words come
+ * from, not only in the words the model chose to quote, so a negation the
+ * quote left out still counts. An hour is named only when the words give its
+ * value, AM or PM, and "from", with no minutes: anything less is kept as
+ * something to confirm. What a clause explicitly denies (a day, a start hour,
+ * a place, with a negation in that same clause) is recorded as such: it is
+ * the only ground on which the review says that two sources disagree. Named
+ * is never established: no availability is concluded from the words. A free
+ * statement (other) is never assessed: it is listed for the reviewer.
+ * Anything that fails is withheld, listed, and never shown as a finding. A
+ * claim with no source at all is refused the same way.
  *
  * What the code cannot check is the wording of a rephrase: the claim says so,
  * and the reviewer judges it against the recording.
  */
 import type { RawClaim, RawDraft, RawTranscript } from "./raw";
-import type { Day, Draft, DocumentExtraction, ExtractedField, RecordingClaim, RecordingReview, Transcript, TranscriptSegment, Withheld } from "./types";
+import type { ConflictingValue, Day, Denied, Draft, DocumentExtraction, ExtractedField, Place, RecordingClaim, RecordingReview, Transcript, TranscriptSegment, Withheld } from "./types";
 
 export interface DocumentSource {
   mediaId: string;
@@ -146,22 +152,60 @@ interface Token {
   clause: number;
 }
 
-/** Clause boundaries: punctuation that is not the colon of a clock time, and "but". */
-const CLAUSE_BREAK = /[,.;!?()]+|(?<!\d):|:(?!\d)|\bbut\b|\bpero\b/;
+/** How a clause began: at punctuation, at a segment boundary of the transcription, or at "but" / "pero", kept as its first word. */
+type Break = "punct" | "segment" | "conjunction";
 
-function tokenize(segments: TranscriptSegment[]): Token[] {
+interface Tokenized {
+  tokens: Token[];
+  /** By clause id. */
+  breaks: Break[];
+}
+
+/** Punctuation that closes a clause: everything but the colon of a clock time. */
+const PUNCT_BREAK = /[,.;!?()]+|(?<!\d):|:(?!\d)/;
+/** Words that open a clause and stay in it, so the quoted words still match the transcript. */
+const CONJUNCTIONS = new Set(["but", "pero"]);
+
+function tokenize(segments: TranscriptSegment[]): Tokenized {
   const tokens: Token[] = [];
-  let clause = 0;
+  const breaks: Break[] = [];
+  let clause = -1;
+  const open = (kind: Break) => {
+    clause += 1;
+    breaks[clause] = kind;
+  };
   segments.forEach((segment, index) => {
     const text = normalize(segment.text).replace(/\b([ap])\.\s?m\.?(?=[\s,.;!?)]|$)/g, "$1m");
-    for (const piece of text.split(CLAUSE_BREAK)) {
+    let first = true;
+    for (const piece of text.split(PUNCT_BREAK)) {
       const list = words(piece);
       if (list.length === 0) continue;
-      for (const word of list) tokens.push({ word, segment: index, clause });
-      clause += 1;
+      open(first ? "segment" : "punct");
+      first = false;
+      for (const word of list) {
+        const clauseHasWords = tokens.length > 0 && tokens[tokens.length - 1].clause === clause;
+        if (CONJUNCTIONS.has(word) && clauseHasWords) open("conjunction");
+        tokens.push({ word, segment: index, clause });
+      }
     }
   });
-  return tokens;
+  return { tokens, breaks };
+}
+
+/** The words of one clause. */
+function clauseWords(tokenized: Tokenized, clause: number): string[] {
+  return tokenized.tokens.filter((t) => t.clause === clause).map((t) => t.word);
+}
+
+/**
+ * True when a token can be read together with the clause it follows or
+ * precedes: only a break made by the transcription's segments joins, since a
+ * segment is a timestamp, not a grammatical unit. Punctuation and "but" do not.
+ */
+function joined(tokenized: Tokenized, fromClause: number, toClause: number): boolean {
+  const [low, high] = fromClause <= toClause ? [fromClause, toClause] : [toClause, fromClause];
+  for (let c = low + 1; c <= high; c++) if (tokenized.breaks[c] !== "segment") return false;
+  return true;
 }
 
 export interface LocatedQuote {
@@ -169,6 +213,8 @@ export interface LocatedQuote {
   end: number;
   /** The full clauses the quoted words come from, as word lists: what the parent said around the quote. */
   clauses: string[][];
+  /** The clauses by id in the tokenized transcript, for the hour reading that looks across a segment boundary. */
+  context: { tokenized: Tokenized; clauseIds: number[] };
 }
 
 /**
@@ -179,7 +225,8 @@ export interface LocatedQuote {
  */
 export function locateWords(quote: string, segments: TranscriptSegment[]): LocatedQuote | null {
   const needle = words(quote);
-  const tokens = tokenize(segments);
+  const tokenized = tokenize(segments);
+  const { tokens } = tokenized;
   const at = indexOfWords(
     needle,
     tokens.map((t) => t.word),
@@ -189,8 +236,8 @@ export function locateWords(quote: string, segments: TranscriptSegment[]): Locat
   const first = span[0].segment;
   const last = span[span.length - 1].segment;
   const clauseIds = [...new Set(span.map((t) => t.clause))];
-  const clauses = clauseIds.map((id) => tokens.filter((t) => t.clause === id).map((t) => t.word));
-  return { start: segments[first].start, end: segments[last].end, clauses };
+  const clauses = clauseIds.map((id) => clauseWords(tokenized, id));
+  return { start: segments[first].start, end: segments[last].end, clauses, context: { tokenized, clauseIds } };
 }
 
 export function locateQuote(quote: string, segments: TranscriptSegment[]): { start: number; end: number } | null {
@@ -241,18 +288,50 @@ const DAY_WORDS: Record<Day, string[]> = {
   sunday: ["sunday", "sundays", "sun", "domingo"],
 };
 
+const ALL_DAYS = Object.keys(DAY_WORDS) as Day[];
+
 const NEGATIONS = new Set([
   "not", "no", "never", "cannot", "except", "impossible", "unable", "avoid", "without", "neither", "nor",
   "dont", "doesnt", "cant", "wont", "isnt", "arent", "couldnt", "wouldnt", "shouldnt",
   "nunca", "tampoco", "excepto", "imposible", "jamas", "jamás", "ni", "sin",
 ]);
 
+/** Phrases whose "no" or "not" affirms rather than negates: "no problem with Tuesdays" says that Tuesday works. */
+const NEGATION_EXCEPTIONS: string[][] = [
+  ["no", "problem"],
+  ["no", "problems"],
+  ["no", "issue"],
+  ["no", "issues"],
+  ["no", "trouble"],
+  ["not", "a", "problem"],
+  ["not", "an", "issue"],
+  ["sin", "problema"],
+  ["sin", "problemas"],
+  ["ningun", "problema"],
+  ["ningún", "problema"],
+  ["no", "hay", "problema"],
+];
+
 function mentionsDay(clause: string[], day: Day): boolean {
   return clause.some((w) => DAY_WORDS[day].includes(w));
 }
 
+/** The clause without the phrases that only look like negations. */
+function withoutExceptions(clause: string[]): string[] {
+  const out = [...clause];
+  for (const phrase of NEGATION_EXCEPTIONS) {
+    let at = indexOfWords(phrase, out);
+    while (at !== -1) {
+      out.splice(at, phrase.length);
+      at = indexOfWords(phrase, out);
+    }
+  }
+  return out;
+}
+
+/** True when the clause carries a negation of its own: a negation word in this clause, not in the one before the comma or the segment boundary. */
 function negated(clause: string[]): boolean {
-  return clause.some((w) => NEGATIONS.has(w) || w.endsWith("n't"));
+  return withoutExceptions(clause).some((w) => NEGATIONS.has(w) || w.endsWith("n't"));
 }
 
 const NUMBER_WORDS: Record<string, number> = {
@@ -262,7 +341,8 @@ const NUMBER_WORDS: Record<string, number> = {
 
 const FROM_WORDS = new Set(["after", "from", "starting", "past", "beginning", "onwards", "onward", "desde", "después", "despues", "partir", "luego"]);
 const BEFORE_WORDS = new Set(["before", "until", "till", "by", "antes", "hasta"]);
-const AT_WORDS = new Set(["at", "around", "about", "las", "la"]);
+/** "at" and its Spanish "a"; the articles "las" and "la" are not relations. */
+const AT_WORDS = new Set(["at", "around", "about", "a", "alrededor"]);
 
 export interface HourMention {
   /** The words the hour was read from, as spoken. */
@@ -271,7 +351,11 @@ export interface HourMention {
   hour12: number;
   /** The 24-hour value when AM or PM (or a 24-hour figure) is in the words; null when the period is not said. */
   hour24: number | null;
+  /** Minutes as spoken: "3:30 pm" is not 15:00. */
+  minutes: number;
   relation: "from" | "before" | "at" | null;
+  /** The clause the hour sits in carries a negation of its own. */
+  negated: boolean;
 }
 
 const PERIOD_PATTERNS: { re: RegExp; period: "am" | "pm"; length: number }[] = [
@@ -287,16 +371,26 @@ const PERIOD_PATTERNS: { re: RegExp; period: "am" | "pm"; length: number }[] = [
   { re: /^tonight\b/, period: "pm", length: 1 },
 ];
 
-/** Every clock hour named in a clause, with what the words say about its period and its relation. */
-export function hoursIn(clause: string[]): HourMention[] {
+/**
+ * Every clock hour named in a clause, with what the words say about its
+ * period, its minutes and its relation. The words after the hour (its AM or
+ * PM) and before it (its "from") are read across a boundary the transcription
+ * drew between two segments, never across punctuation or "but".
+ */
+export function hourMentions(tokenized: Tokenized, clause: number): HourMention[] {
+  const { tokens } = tokenized;
   const out: HourMention[] = [];
-  clause.forEach((word, i) => {
+  const isNegated = negated(clauseWords(tokenized, clause));
+  tokens.forEach((token, i) => {
+    if (token.clause !== clause) return;
+    const word = token.word;
     let value: number | null = null;
     let period: "am" | "pm" | null = null;
+    let minutes = 0;
     const digits = word.match(/^(\d{1,2})(?::(\d{2}))?(am|pm)?$/);
     if (digits) {
       const h = Number(digits[1]);
-      const minutes = digits[2] !== undefined ? Number(digits[2]) : 0;
+      minutes = digits[2] !== undefined ? Number(digits[2]) : 0;
       // A lone "00" or "30" is a minute figure, not an hour; anything past 23 is not a clock hour.
       if (digits[1].length === 2 && digits[1].startsWith("0") && digits[2] === undefined && !digits[3]) return;
       if (h > 23 || minutes > 59) return;
@@ -311,11 +405,17 @@ export function hoursIn(clause: string[]): HourMention[] {
       period = "am";
     } else if (word in NUMBER_WORDS) {
       // "once" is Spanish for eleven and an English adverb: only count it after "las" or "la".
-      if (word === "once" && !clause.slice(Math.max(0, i - 2), i).some((w) => w === "las" || w === "la")) return;
+      const two = tokens.slice(Math.max(0, i - 2), i).map((t) => t.word);
+      if (word === "once" && !two.some((w) => w === "las" || w === "la")) return;
       value = NUMBER_WORDS[word];
     }
     if (value === null) return;
-    let after = clause.slice(i + 1, i + 6);
+    // Up to five words after the hour, and four before, as long as only a segment boundary separates them from it.
+    let after = tokens.slice(i + 1, i + 6).filter((t) => joined(tokenized, clause, t.clause)).map((t) => t.word);
+    const before = tokens
+      .slice(Math.max(0, i - 4), i)
+      .filter((t) => joined(tokenized, t.clause, clause))
+      .map((t) => t.word);
     const extra: string[] = [];
     if (after[0] === "o'clock" || after[0] === "oclock") {
       extra.push(after[0]);
@@ -329,7 +429,6 @@ export function hoursIn(clause: string[]): HourMention[] {
         extra.push(...after.slice(0, match.length));
       }
     }
-    const before = clause.slice(Math.max(0, i - 4), i);
     let relation: HourMention["relation"] = null;
     for (let j = before.length - 1; j >= 0 && relation === null; j--) {
       const w = before[j];
@@ -339,45 +438,77 @@ export function hoursIn(clause: string[]): HourMention[] {
     }
     const hour12 = value % 12;
     const hour24 = period === null ? null : period === "pm" ? hour12 + 12 : hour12;
-    out.push({ text: [word, ...extra].join(" "), hour12, hour24, relation });
+    out.push({ text: [word, ...extra].join(" "), hour12, hour24, minutes, relation, negated: isNegated });
   });
   return out;
 }
 
 export type HourCheck =
-  | { status: "verified"; mention: HourMention }
+  | { status: "named"; mention: HourMention }
+  | { status: "negated"; mention: HourMention }
   | { status: "period_missing"; mention: HourMention }
   | { status: "relation_missing"; mention: HourMention }
+  | { status: "minutes_named"; mention: HourMention }
   | { status: "not_earliest"; mention: HourMention }
   | { status: "period_mismatch"; mention: HourMention }
   | { status: "not_named" }
   | { status: "invalid" };
 
-/** What the spoken clauses establish about a 24-hour earliest hour the model structured. */
-export function checkHour(hour: number, clauses: string[][]): HourCheck {
+/**
+ * What the spoken clauses say about a 24-hour earliest hour the model
+ * structured. "named" means value, AM or PM, and "from" are all in the words,
+ * with no minutes and no negation in the clause: the hour was said, which
+ * does not make it established as working.
+ */
+export function checkHour(hour: number, mentions: HourMention[]): HourCheck {
   if (!Number.isInteger(hour) || hour < 0 || hour > 23) return { status: "invalid" };
-  const mentions = clauses.flatMap(hoursIn);
-  const exact = mentions.find((m) => m.hour24 === hour);
+  const exact = mentions.find((m) => m.hour24 === hour && m.minutes === 0);
+  const withMinutes = mentions.find((m) => m.hour24 === hour && m.minutes !== 0);
   const ambiguous = mentions.find((m) => m.hour24 === null && m.hour12 === hour % 12);
   const mismatch = mentions.find((m) => m.hour24 !== null && m.hour24 !== hour && m.hour12 === hour % 12);
-  const mention = exact ?? ambiguous;
+  const mention = exact ?? withMinutes ?? ambiguous;
   if (!mention) return mismatch ? { status: "period_mismatch", mention: mismatch } : { status: "not_named" };
   if (mention.relation === "before") return { status: "not_earliest", mention };
   if (mention.hour24 === null) return { status: "period_missing", mention };
+  if (mention.minutes !== 0) return { status: "minutes_named", mention };
   if (mention.relation !== "from") return { status: "relation_missing", mention };
-  return { status: "verified", mention };
+  if (mention.negated) return { status: "negated", mention };
+  return { status: "named", mention };
 }
 
 const clock = (hour: number) => `${String(hour).padStart(2, "0")}:00`;
 
-const PLACE_WORDS: Record<"home" | "center" | "either", string[]> = {
+const PLACE_WORDS: Record<Place, string[]> = {
   home: ["home", "house", "casa", "hogar", "domicilio"],
   center: ["center", "centre", "clinic", "office", "centro", "clinica", "clínica", "oficina", "consultorio"],
   either: ["either", "both", "anywhere", "wherever", "cualquiera", "cualquier", "ambos", "dos", "donde", "sea"],
 };
 
-function placeClauses(clauses: string[][], place: "home" | "center" | "either"): string[][] {
+const ALL_PLACES = Object.keys(PLACE_WORDS) as Place[];
+
+function placeClauses(clauses: string[][], place: Place): string[][] {
   return clauses.filter((clause) => PLACE_WORDS[place].some((w) => clause.includes(w)));
+}
+
+/**
+ * What the clauses of the quoted words explicitly deny: a day, a place, or a
+ * start hour (value, AM or PM and "from" all spoken) named in a clause that
+ * carries a negation of its own. Never read across a comma, a segment
+ * boundary or "but". The only ground for "Sources disagree".
+ */
+function deniedIn(located: LocatedQuote): Denied {
+  const { tokenized, clauseIds } = located.context;
+  const denied: Denied = { days: [], hours: [], places: [] };
+  for (const id of clauseIds) {
+    const clause = clauseWords(tokenized, id);
+    if (!negated(clause)) continue;
+    for (const day of ALL_DAYS) if (mentionsDay(clause, day) && !denied.days.includes(day)) denied.days.push(day);
+    for (const place of ALL_PLACES) if (PLACE_WORDS[place].some((w) => clause.includes(w)) && !denied.places.includes(place)) denied.places.push(place);
+    for (const m of hourMentions(tokenized, id)) {
+      if (m.hour24 !== null && m.minutes === 0 && m.relation === "from" && !denied.hours.includes(m.hour24)) denied.hours.push(m.hour24);
+    }
+  }
+  return denied;
 }
 
 /** Words that would make a statement clinical. Nothing clinical is assessed here, so such a statement is withheld. */
@@ -394,7 +525,7 @@ function isVerbatim(statement: string, quote: string): boolean {
 /* ---------- The check ---------- */
 
 function checkDocument(doc: RawDraft["documents"][number], source: DocumentSource, hold: (key: string, label: string, page: number, reason: Withheld["reason"], detail: string) => void): DocumentExtraction {
-  const fields: ExtractedField[] = [];
+  const passed: ExtractedField[] = [];
   for (const field of doc.fields) {
     const quote = field.quote.trim();
     const refuse = (reason: Withheld["reason"], detail: string) => hold(field.key, field.label, field.page, reason, detail);
@@ -436,7 +567,23 @@ function checkDocument(doc: RawDraft["documents"][number], source: DocumentSourc
       checked.push(`machine form "${normalized}" dropped: it does not match the value`);
       normalized = null;
     }
-    fields.push({ key: field.key, label: field.label, value, normalized, page: field.page, quote, uncertain: field.uncertain?.trim() || null, checked });
+    passed.push({ key: field.key, label: field.label, value, normalized, page: field.page, quote, uncertain: field.uncertain?.trim() || null, checked });
+  }
+  // Two fields with the same key are one field. The raw shape does not forbid the repeat; the review must never carry two propositions with one id.
+  const fields: ExtractedField[] = [];
+  for (const field of passed) {
+    const first = fields.find((f) => f.key === field.key);
+    if (!first) {
+      fields.push(field);
+      continue;
+    }
+    if (alnum(first.value) === alnum(field.value)) {
+      first.checked.push(`proposed again with the same value (page ${field.page}): merged into this field`);
+      continue;
+    }
+    const other: ConflictingValue = { value: field.value, normalized: field.normalized, page: field.page, quote: field.quote, uncertain: field.uncertain, checked: field.checked };
+    first.conflict = [...(first.conflict ?? []), other];
+    first.checked.push(`another value was proposed for the same field, "${field.value}" (page ${field.page}): both are kept, neither is chosen`);
   }
   return { mediaId: doc.mediaId, readable: doc.readable, unreadableReason: doc.unreadableReason?.trim() || null, fields };
 }
@@ -472,6 +619,8 @@ function checkClaim(claim: RawClaim, source: RecordingSource, hold: (reason: Wit
     return null;
   }
   const clauses = located.clauses;
+  const { tokenized, clauseIds } = located.context;
+  const mentions = clauseIds.flatMap((id) => hourMentions(tokenized, id));
   const spoken = clauses.map((c) => c.join(" ")).join(" / ");
   checked.push(`checked in the spoken clause${clauses.length > 1 ? "s" : ""} "${spoken}"`);
   let days: Day[] = [];
@@ -486,7 +635,7 @@ function checkClaim(claim: RawClaim, source: RecordingSource, hold: (reason: Wit
       const negatedMention = mentioning.some(negated);
       if (wantNegation && !negatedMention) return `negation_mismatch:the spoken words do not say that ${day} does not work`;
       if (!wantNegation && negatedMention) return `negation_mismatch:the spoken words negate ${day}`;
-      checked.push(`${day} named in the spoken clause, ${negatedMention ? "with a negation" : "with no negation"}`);
+      checked.push(`${day} named in the spoken clause, ${negatedMention ? "with a negation in that clause" : "with no negation in that clause"}; named is not established as working`);
     }
     days = [...claim.days];
     if (claim.days.length === 0) checked.push("no day named in the structured part");
@@ -507,6 +656,10 @@ function checkClaim(claim: RawClaim, source: RecordingSource, hold: (reason: Wit
         return `"${check.mention.text}" is named without AM or PM`;
       case "relation_missing":
         return `"${check.mention.text}" is named without saying from when`;
+      case "minutes_named":
+        return `the spoken words say "${check.mention.text}", with minutes, not ${clock(hour)}`;
+      case "negated":
+        return `the spoken clause that names "${check.mention.text}" negates it`;
       default:
         return "";
     }
@@ -516,10 +669,10 @@ function checkClaim(claim: RawClaim, source: RecordingSource, hold: (reason: Wit
   if (claim.key === "days_that_work" || claim.key === "days_that_do_not_work") {
     refused = checkDays(claim.key === "days_that_do_not_work");
     if (!refused && claim.earliestHour !== null) {
-      const check = checkHour(claim.earliestHour, clauses);
-      if (check.status === "verified") {
+      const check = checkHour(claim.earliestHour, mentions);
+      if (check.status === "named") {
         earliestHour = claim.earliestHour;
-        checked.push(`hour ${clock(claim.earliestHour)} established from "${check.mention.text}"`);
+        checked.push(`hour ${clock(claim.earliestHour)} named in the spoken words as "${check.mention.text}"; named is not established as working`);
       } else checked.push(`hour ${clock(claim.earliestHour)} dropped: ${hourDetail(check, claim.earliestHour)}`);
     }
     if (!refused && claim.location) {
@@ -529,13 +682,13 @@ function checkClaim(claim: RawClaim, source: RecordingSource, hold: (reason: Wit
     }
   } else if (claim.key === "time_window") {
     if (claim.earliestHour !== null) {
-      const check = checkHour(claim.earliestHour, clauses);
-      if (check.status === "verified") {
+      const check = checkHour(claim.earliestHour, mentions);
+      if (check.status === "named") {
         earliestHour = claim.earliestHour;
-        checked.push(`hour ${clock(claim.earliestHour)} established from "${check.mention.text}": value, AM or PM, and "from" all in the spoken words`);
-      } else if (check.status === "period_missing" || check.status === "relation_missing") {
-        unresolved.push(`${hourDetail(check, claim.earliestHour)}: ${clock(claim.earliestHour)} is the model's reading and is not compared with the form.`);
-        checked.push(`hour ${clock(claim.earliestHour)} not established: ${hourDetail(check, claim.earliestHour)}`);
+        checked.push(`hour ${clock(claim.earliestHour)} named in the spoken words as "${check.mention.text}": value, AM or PM, and "from" all present; named is not established as working`);
+      } else if (check.status === "period_missing" || check.status === "relation_missing" || check.status === "minutes_named" || check.status === "negated") {
+        unresolved.push(`${hourDetail(check, claim.earliestHour)}: ${clock(claim.earliestHour)} is the model's reading and is not taken from the words.`);
+        checked.push(`hour ${clock(claim.earliestHour)} not taken: ${hourDetail(check, claim.earliestHour)}`);
       } else refused = `structured_not_in_quote:${hourDetail(check, claim.earliestHour)}`;
     } else checked.push("no hour in the structured part: the rule will say it cannot compare");
     days = claim.days.filter((day) => clauses.some((clause) => mentionsDay(clause, day) && !negated(clause)));
@@ -547,7 +700,7 @@ function checkClaim(claim: RawClaim, source: RecordingSource, hold: (reason: Wit
       else if (named.some(negated)) refused = `negation_mismatch:the spoken words negate the place "${claim.location}"`;
       else {
         location = claim.location;
-        checked.push(`place "${claim.location}" named in the spoken clause, with no negation`);
+        checked.push(`place "${claim.location}" named in the spoken clause, with no negation in that clause; named is not established as preferred`);
       }
     } else checked.push("no place in the structured part: the rule will say it cannot compare");
   }
@@ -557,6 +710,14 @@ function checkClaim(claim: RawClaim, source: RecordingSource, hold: (reason: Wit
     hold(refused.slice(0, colon) as Withheld["reason"], `"${claim.label}": ${refused.slice(colon + 1)}.`);
     return null;
   }
+
+  const denies = deniedIn(located);
+  const deniedWords = [
+    ...denies.days.map((d) => d),
+    ...denies.hours.map((h) => `from ${clock(h)}`),
+    ...denies.places.map((p) => `the place "${p}"`),
+  ];
+  if (deniedWords.length > 0) checked.push(`the spoken clause explicitly negates ${deniedWords.join(", ")}: the only ground on which the review says that two sources disagree`);
 
   const verbatim = isVerbatim(claim.statement, quote);
   const nature = claim.nature === "extraction" && !verbatim ? "rephrase" : claim.nature;
@@ -574,6 +735,7 @@ function checkClaim(claim: RawClaim, source: RecordingSource, hold: (reason: Wit
     earliestHour,
     location,
     proposed: { days: [...claim.days], earliestHour: claim.earliestHour, location: claim.location },
+    denies,
     uncertain: claim.uncertain?.trim() || null,
     unresolved: unresolved.length > 0 ? unresolved.join(" ") : null,
     checked,

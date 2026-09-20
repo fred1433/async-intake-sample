@@ -42,7 +42,8 @@ describe("rule 1: a missing required item prepares a request, and sends nothing"
     expect(focal.finding).toBe("missing");
     expect(focal.inRequest).toBe(true);
     expect(state.request?.status).toBe("draft");
-    expect(state.request?.items).toEqual([{ propositionId: "doc:insurance_card", kind: "missing_item" }]);
+    expect(state.request?.items).toMatchObject([{ propositionId: "doc:insurance_card", kind: "missing_item" }]);
+    expect(state.request?.items[0].satisfiedAt).toBeUndefined();
     expect(state.request?.text).toContain("Hi Jordan,");
     expect(state.request?.text).toContain("Insurance card, front and back");
     expect(state.request?.text).toContain("SB-2041");
@@ -94,14 +95,16 @@ describe("rule 2: disagreeing sources and uncertain extractions wait for a revie
     expect(state.journal.find((e) => e.action === "stage_changed")?.detail).toMatch(/Rule 2/);
   });
 
-  it("finds the sources consistent on days when the form lists Tuesday only; the hour, said without AM or PM, stays to confirm", () => {
+  it("leaves the days to confirm when the form lists Tuesday only, and never writes that the sources agree; the hour, said without AM or PM, stays to confirm", () => {
     const s = submission();
     s.answers.preferred_days = ["tuesday"];
     const state = buildReview(s, draft(), NOW);
     const days = state.propositions.find((p) => p.id === "xcheck:days")!;
-    expect(days.finding).toBe("consistent");
-    // "any time after three": the hour is named without AM or PM, so the time window and its cross-check wait for the reviewer.
-    expect(openConflicts(state).map((p) => p.id)).toEqual([expect.stringContaining(":time_window:"), "xcheck:time"]);
+    expect(days.finding).toBe("to_confirm");
+    expect(days.statement).not.toMatch(/agree/);
+    expect(days.statement).toMatch(/Tuesday/);
+    // "any time after three": the hour is named without AM or PM, so the time window waits for the reviewer; every cross-check does.
+    expect(openConflicts(state).map((p) => p.id)).toEqual([expect.stringContaining(":time_window:"), "xcheck:days", "xcheck:time", "xcheck:location"]);
     expect(state.stage).toBe("waiting_for_review");
     let done = state;
     for (const p of openConflicts(state)) done = correct(done, p.id, `${p.statement} Checked by phone: from 3 pm.`, T1);
@@ -317,7 +320,7 @@ describe("an open disagreement cannot simply be approved", () => {
     expect(() => approve(state, "xcheck:days", T1)).toThrow(/nothing was chosen/);
     let corrected = correct(state, "xcheck:days", "Tuesdays after 3 pm, confirmed by phone with the family.", T1);
     expect(corrected.propositions.find((p) => p.id === "xcheck:days")?.state).toBe("corrected");
-    expect(openConflicts(corrected).every((p) => p.id.includes("time"))).toBe(true);
+    expect(openConflicts(corrected).every((p) => /time|location/.test(p.id))).toBe(true);
     for (const p of openConflicts(corrected)) corrected = correct(corrected, p.id, `${p.statement} Checked by phone: from 3 pm.`, T2);
     expect(corrected.stage).toBe("in_review");
   });

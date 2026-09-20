@@ -5,7 +5,6 @@ export { formatDay, formatSeconds, formatWhen } from "@/lib/format";
 
 const FINDING_TONE: Record<Finding, string> = {
   present: "pill-neutral",
-  consistent: "pill-green",
   missing: "pill-amber",
   unreadable: "pill-amber",
   conflicting: "pill-rose",

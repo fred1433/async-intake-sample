@@ -130,8 +130,9 @@ describe("D. Spanish the engine composes", () => {
     s.answers.location = "center";
     s.answers.preferred_days = ["tuesday"];
     let state = buildReview(s, draft(RAW_DRAFT, spokenWithPm), NOW);
-    expect(state.propositions.find((p) => p.id === "xcheck:time")?.finding).toBe("conflicting");
-    expect(state.propositions.find((p) => p.id === "xcheck:location")?.finding).toBe("conflicting");
+    // Since the fourth pass a difference without an explicit negation is to confirm, never a computed disagreement; the question still names both.
+    expect(state.propositions.find((p) => p.id === "xcheck:time")?.finding).toBe("to_confirm");
+    expect(state.propositions.find((p) => p.id === "xcheck:location")?.finding).toBe("to_confirm");
     state = addToRequest(state, "xcheck:time", NOW);
     state = addToRequest(state, "xcheck:location", NOW);
     const text = state.request!.text;

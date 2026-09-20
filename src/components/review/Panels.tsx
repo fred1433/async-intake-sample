@@ -110,24 +110,36 @@ export function RequestDialog({
   request,
   onApprove,
   onEdit,
+  onResolveItem,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   request?: RequestDraft;
   onApprove: () => void;
   onEdit: (text: string) => void;
+  onResolveItem: (propositionId: string) => void;
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-lg" showCloseButton>
-        <RequestBody request={request} onApprove={onApprove} onEdit={onEdit} />
+        <RequestBody request={request} onApprove={onApprove} onEdit={onEdit} onResolveItem={onResolveItem} />
       </DialogContent>
     </Dialog>
   );
 }
 
 /** Mounted with the dialog content, so the editing state starts fresh every time the dialog opens. */
-function RequestBody({ request, onApprove, onEdit }: { request?: RequestDraft; onApprove: () => void; onEdit: (text: string) => void }) {
+function RequestBody({
+  request,
+  onApprove,
+  onEdit,
+  onResolveItem,
+}: {
+  request?: RequestDraft;
+  onApprove: () => void;
+  onEdit: (text: string) => void;
+  onResolveItem: (propositionId: string) => void;
+}) {
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState("");
 
@@ -164,10 +176,29 @@ function RequestBody({ request, onApprove, onEdit }: { request?: RequestDraft; o
           </div>
           <ul className="space-y-1 text-[13px] text-ink-2">
             {request.items.map((item) => (
-              <li key={item.propositionId} className="flex items-center gap-2">
+              <li key={item.propositionId} className="flex flex-wrap items-center gap-x-2 gap-y-1">
                 {item.satisfiedAt ? <Check className="size-3.5 text-green-ink" /> : <Send className="size-3.5 text-ink-3" />}
                 <span className={item.satisfiedAt ? "line-through text-ink-3" : ""}>{itemLabel(item.propositionId)}</span>
-                {item.satisfiedAt && <span className="text-[12px] text-ink-3">received {formatWhen(item.satisfiedAt)}</span>}
+                {item.satisfiedAt && (
+                  <span className="text-[12px] text-ink-3">
+                    {item.satisfiedBy === "reviewer" ? "resolved by the reviewer" : "received"} {formatWhen(item.satisfiedAt)}
+                  </span>
+                )}
+                {!item.satisfiedAt && item.basisMissing && (
+                  <span className="pill pill-amber" title={`Since ${formatWhen(item.basisMissing.at)}`}>
+                    {item.basisMissing.because}
+                  </span>
+                )}
+                {!item.satisfiedAt && (
+                  <button
+                    type="button"
+                    onClick={() => onResolveItem(item.propositionId)}
+                    className="inline-flex h-6 items-center rounded-md border border-line bg-white px-2 text-[11.5px] font-semibold text-ink-2 hover:bg-muted"
+                    title="Take this item out of the request: handled outside the message, or no longer a question. The journal keeps it."
+                  >
+                    Resolve
+                  </button>
+                )}
               </li>
             ))}
           </ul>

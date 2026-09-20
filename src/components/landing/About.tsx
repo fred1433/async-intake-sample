@@ -9,7 +9,7 @@ const COLUMNS = (recorded: string) => [
     title: "What runs for real",
     lines: [
       "Transcription (a Google model) and extraction (an Anthropic model), on request, on the sample media only.",
-      "Quotes, values and dates are checked on the document; days, hours, places and negations in the spoken clause around the quote; audio segments against the recording's length. An hour without AM or PM, an uncertain reading or a free statement is to confirm, never a fact; what fails is listed as not evaluable.",
+      "Quotes, values and dates are checked on the document; days, hours, places and negations in the spoken clause around the quote; audio segments against the recording's length. The code never writes that the form and the recording agree: a cross-check is to confirm, or sources disagree on an explicit negation. An uncertain reading or a free statement is to confirm; what fails is listed as not evaluable.",
       `The review shown first was recorded on ${recorded}. It can be run again under a daily cap; past the cap, the recorded review stays and says so.`,
     ],
   },
@@ -25,7 +25,7 @@ const COLUMNS = (recorded: string) => [
     lines: [
       "No upload of your own files: the server processes only the sample media the page provides.",
       "No cross-device resume, no messages sent, no accounts or roles, no multi-tenant setup.",
-      "No clinical assessment of any kind. The checks are administrative: received, readable, consistent.",
+      "No clinical assessment of any kind. The checks are administrative: received, readable, to confirm, sources disagree.",
     ],
   },
   {

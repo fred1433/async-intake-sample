@@ -181,12 +181,18 @@ export async function extract(
   };
 }
 
+/** What the models answered, before the code checked it: kept with the recorded run so the check can be run again without a call. */
+export interface RawRun {
+  transcripts: Transcript[];
+  extraction: RawDraft;
+}
+
 /** Runs the whole thing on known sample media only. Unknown ids are refused before any call. */
 export async function computeDraft(
   mediaIds: string[],
   origin: Draft["origin"],
   calls: Partial<PipelineCalls> = {},
-): Promise<{ draft: Draft; usage: PipelineUsage }> {
+): Promise<{ draft: Draft; usage: PipelineUsage; raw: RawRun }> {
   const { transcribe: doTranscribe = transcribe, extract: doExtract = extract } = calls;
   const ids = Array.from(new Set(mediaIds));
   for (const id of ids) {
@@ -217,11 +223,19 @@ export async function computeDraft(
   const { raw, usage: extractionUsage } = await doExtract(documents, transcripts);
   usage.extraction = extractionUsage;
 
+  // The draft says what really ran for it: a reused transcription is not a transcription call.
+  const draft = verifyRun({ transcripts, extraction: raw }, ids, { origin, computedAt: new Date().toISOString(), transcriptReused });
+  return { draft, usage, raw: { transcripts, extraction: raw } };
+}
+
+/** The code's check of what the models answered: the same function the fixture is rebuilt with, without a call. */
+export function verifyRun(raw: RawRun, mediaIds: string[], meta: { origin: Draft["origin"]; computedAt: string; transcriptReused?: boolean }): Draft {
+  const ids = Array.from(new Set(mediaIds));
+  const documents = ids.map(mediaOf).filter((m): m is SampleDocument => m.kind === "document").map((m) => documentOf(m.id));
+  const recordings = ids.map(mediaOf).filter((m): m is SampleRecording => m.kind === "recording");
   const sources = {
     documents: documents.map(documentSource),
-    recordings: transcripts.map((t): RecordingSource => ({ mediaId: t.mediaId, transcript: t, durationSeconds: recordings.find((r) => r.id === t.mediaId)?.durationSeconds ?? 0 })),
+    recordings: raw.transcripts.map((t): RecordingSource => ({ mediaId: t.mediaId, transcript: t, durationSeconds: recordings.find((r) => r.id === t.mediaId)?.durationSeconds ?? 0 })),
   };
-  // The draft says what really ran for it: a reused transcription is not a transcription call.
-  const draft = verifyDraft(raw, sources, { origin, computedAt: new Date().toISOString(), transcriptReused });
-  return { draft, usage };
+  return verifyDraft(raw.extraction, sources, meta);
 }

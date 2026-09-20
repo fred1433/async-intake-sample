@@ -3,13 +3,16 @@
  *
  * Two calls: one transcription (Gemini), one extraction (Claude). The page then
  * serves this file without calling anything; the "run again" button repeats
- * these two calls live, under the daily cap.
+ * these two calls live, under the daily cap. What the models answered is kept
+ * as well (recorded-raw.json), so the code's check can be run again on the
+ * same answers when the check changes, without a call.
  *
- * Usage: npm run fixtures     (reads .env.local; never prints a key)
+ * Usage: npm run fixtures                 (two real calls; reads .env.local; never prints a key)
+ *        npm run fixtures -- --reverify   (no call: checks the stored model answers again with the current code)
  */
-import { writeFile, mkdir } from "node:fs/promises";
+import { readFile, writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
-import { computeDraft } from "../src/lib/ai/pipeline";
+import { computeDraft, verifyRun, type PipelineUsage, type RawRun } from "../src/lib/ai/pipeline";
 import { KNOWN_MEDIA_IDS } from "../src/lib/sample";
 
 async function main() {
@@ -18,22 +21,47 @@ async function main() {
   } catch {
     // Environment already set, or no local file: the pipeline checks what it needs.
   }
-  const started = Date.now();
-  const { draft, usage } = await computeDraft(KNOWN_MEDIA_IDS, "recorded");
   const out = path.join(process.cwd(), "src", "lib", "fixtures");
   await mkdir(out, { recursive: true });
-  const run = {
-    note: "Recorded run of the two model calls on the sample media, verified by the code. The draft next to this file is served as is; no call happens when the page shows it.",
-    recordedAt: draft.computedAt,
-    elapsedMs: Date.now() - started,
-    usage,
-  };
-  // The draft goes to the browser; the run details (models, tokens) stay in the repository only.
+  const reverify = process.argv.includes("--reverify");
+  const started = Date.now();
+  let draft;
+  let usage: PipelineUsage;
+  let raw: RawRun;
+  let run: Record<string, unknown>;
+  if (reverify) {
+    // The stored answers, checked again by the current code: the recorded date and the usage are those of the real run.
+    raw = JSON.parse(await readFile(path.join(out, "recorded-raw.json"), "utf8")) as RawRun;
+    const previous = JSON.parse(await readFile(path.join(out, "recorded-run.json"), "utf8")) as { recordedAt: string; usage: PipelineUsage; elapsedMs: number; verifiedAgainAt?: string };
+    usage = previous.usage;
+    draft = verifyRun(raw, KNOWN_MEDIA_IDS, { origin: "recorded", computedAt: previous.recordedAt });
+    run = {
+      note: "Recorded run of the two model calls on the sample media, verified by the code. The draft next to this file is served as is; no call happens when the page shows it. The model answers are in recorded-raw.json; verifiedAgainAt says when the code's check was last run again on them without a call.",
+      recordedAt: previous.recordedAt,
+      elapsedMs: previous.elapsedMs,
+      verifiedAgainAt: new Date().toISOString(),
+      usage,
+    };
+  } else {
+    const result = await computeDraft(KNOWN_MEDIA_IDS, "recorded");
+    draft = result.draft;
+    usage = result.usage;
+    raw = result.raw;
+    run = {
+      note: "Recorded run of the two model calls on the sample media, verified by the code. The draft next to this file is served as is; no call happens when the page shows it. The model answers are in recorded-raw.json.",
+      recordedAt: draft.computedAt,
+      elapsedMs: Date.now() - started,
+      usage,
+    };
+    await writeFile(path.join(out, "recorded-raw.json"), JSON.stringify(raw, null, 2) + "\n");
+  }
+  // The draft goes to the browser; the run details (models, tokens) and the raw answers stay in the repository only.
   await writeFile(path.join(out, "recorded-draft.json"), JSON.stringify(draft, null, 2) + "\n");
   await writeFile(path.join(out, "recorded-run.json"), JSON.stringify(run, null, 2) + "\n");
   console.log(
     JSON.stringify(
       {
+        mode: reverify ? "reverify (no call)" : "computed (two calls)",
         recordedAt: draft.computedAt,
         elapsedMs: run.elapsedMs,
         usage,

@@ -178,7 +178,9 @@ export function PropositionDetail({
         )}
         {p.finding === "withheld" && (
           <p className="mt-2 text-[12.5px] leading-[1.5] text-ink-3">
-            The model proposed this and the code refused it. It is listed so nothing disappears: acknowledge it, or correct it with what the source really says.
+            {p.details?.reason?.[0] === "free_statement"
+              ? "Not automatically assessed; reviewer to confirm. The model proposed this free statement and the code does not evaluate it: read the quoted words, then acknowledge it or correct it."
+              : "The model proposed this and the code refused it. It is listed so nothing disappears: acknowledge it, or correct it with what the source really says."}
           </p>
         )}
       </div>

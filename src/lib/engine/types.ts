@@ -56,6 +56,16 @@ export interface Transcript {
   outOfRange?: number;
 }
 
+/** Another value the draft proposed for the same key, which passed the source check too. Neither is chosen by the code. */
+export interface ConflictingValue {
+  value: string;
+  normalized: string | null;
+  page: number;
+  quote: string;
+  uncertain: string | null;
+  checked: string[];
+}
+
 export interface ExtractedField {
   key: string;
   label: string;
@@ -69,6 +79,8 @@ export interface ExtractedField {
   uncertain: string | null;
   /** What the code verified about this field, in words. */
   checked: string[];
+  /** Set when the draft proposed other values for the same key: the field is then to confirm, and the reviewer picks. */
+  conflict?: ConflictingValue[];
 }
 
 export interface DocumentExtraction {
@@ -79,6 +91,20 @@ export interface DocumentExtraction {
 }
 
 export type Day = "monday" | "tuesday" | "wednesday" | "thursday" | "friday" | "saturday" | "sunday";
+
+export type Place = "home" | "center" | "either";
+
+/**
+ * What the spoken clauses of the quoted words explicitly deny: a day, a start
+ * hour (value, AM or PM and "from" all spoken), a place, each named in a
+ * clause that carries a negation of its own. The only ground on which the
+ * review says that two sources disagree; everything else is to confirm.
+ */
+export interface Denied {
+  days: Day[];
+  hours: number[];
+  places: Place[];
+}
 
 export interface RecordingClaim {
   key: "days_that_work" | "days_that_do_not_work" | "time_window" | "location_preference" | "other";
@@ -91,14 +117,16 @@ export interface RecordingClaim {
   segment: { start: number; end: number };
   /** Verbatim words of the transcript. */
   quote: string;
-  /** Days named in the spoken clause of the quoted words, with the negation checked. */
+  /** Days named in the spoken clause of the quoted words, with the negation checked. Named, not established as working. */
   days: Day[];
-  /** The earliest hour the code established from the spoken words (value, AM or PM, and "from" all present), or null. */
+  /** The earliest hour named in the spoken words (value, AM or PM, and "from" all present, no minutes, no negation), or null. Named, not established. */
   earliestHour: number | null;
-  /** A place named in the spoken clause without a negation, or null. */
-  location: "home" | "center" | "either" | null;
+  /** A place named in the spoken clause without a negation, or null. Named, not established as preferred. */
+  location: Place | null;
   /** What the model structured, kept as proposed: a change here is a change of the proposition. */
-  proposed: { days: Day[]; earliestHour: number | null; location: "home" | "center" | "either" | null };
+  proposed: { days: Day[]; earliestHour: number | null; location: Place | null };
+  /** What the spoken clauses explicitly deny. Absent on a draft stored before the fourth pass: read as nothing denied. */
+  denies?: Denied;
   /** What the model itself said it was unsure of. */
   uncertain: string | null;
   /** What the code could not establish from the spoken words: shown as to confirm, never compared. */
@@ -148,11 +176,11 @@ export interface Draft {
 
 /* ---------- The review ---------- */
 
+/** No "consistent": the code never affirms an agreement between two sources. A cross-check is conflicting or to confirm. */
 export type Finding =
   | "present"
   | "unreadable"
   | "missing"
-  | "consistent"
   | "conflicting"
   | "to_confirm"
   | "unusable_audio"
@@ -224,8 +252,15 @@ export interface Proposition {
 export interface RequestItem {
   propositionId: string;
   kind: "missing_item" | "unreadable_item" | "confirm";
-  /** Filled when the parent later provides what was asked. */
+  /** Filled when the family provides what was asked (a new submission), or when the reviewer resolves the item. Never by a draft that stops carrying it. */
   satisfiedAt?: string;
+  satisfiedBy?: "family" | "reviewer";
+  /** What the item rested on when it was composed: the document or recording slot, or the source key of the proposition. */
+  basis?: string;
+  /** The structured facts the question was composed from, kept so the question stays readable when its proposition is gone. */
+  facts?: Record<string, string[]>;
+  /** Set when the current draft no longer carries the proposition this item came from. The item stays open: the reviewer reviews it. */
+  basisMissing?: { at: string; because: string };
 }
 
 export interface RequestApproval {
@@ -249,6 +284,8 @@ export interface RequestDraft {
   approvedText?: string;
   /** Digest of the context of the current text (see RequestApproval.contextKey); an approval holds only for the same context. */
   contextKey: string;
+  /** The parts of the context, digested apart, so a change can be named: who and which child, which items, which facts. */
+  contextParts?: { recipient: string; items: string; facts: string };
   approvedContextKey?: string;
   /** Every approval this request received, with its text; a text that changed is marked superseded. */
   approvals: RequestApproval[];
@@ -292,6 +329,7 @@ export type JournalAction =
   | "approved"
   | "approval_repeated"
   | "added_to_request"
+  | "request_item_resolved"
   | "file_approved"
   | "file_approval_refused"
   | "approval_detached"
