@@ -173,6 +173,47 @@ function daysAskedThenGoneThenBack(): ReviewState {
   return s;
 }
 
+/** The recording is transcribed, but no statement about scheduling passes the source check. */
+function draftWithoutClaims(origin: Draft["origin"] = "live"): Draft {
+  const raw = structuredClone(RAW_DRAFT);
+  raw.recordings[0].claims = [];
+  return draft(raw, undefined, origin);
+}
+
+describe("R7-G. a proposition the family cannot be asked about never enters the request", () => {
+  // The seventh round of the reviewer, on 9bf8328: the branch of merge() that keeps a proposition of the same source key
+  // did not check next.requestable, while the two other branches did. A second identical draft then put the proposition
+  // into the open slot of the question, and the approved request counted it as reviewed.
+  it("G01. unusable recording asked, a draft with nothing to read, the request approved, then the same draft again: the proposition stays out of the request and the file stays unapprovable", () => {
+    let s = buildReview(submission(), draft(RAW_DRAFT, TRUNCATED), NOW);
+    expect(find(s, "rec:scheduling_prompt:unusable")?.inRequest).toBe(true);
+    s = replaceDraft(s, draftWithoutClaims(), T1);
+    const first = find(s, "rec:scheduling_prompt:noclaims")!;
+    expect(first).toBeDefined();
+    expect(first.requestable).toBeFalsy();
+    expect(first.inRequest).toBe(false);
+    // The reviewer approves the request without looking at that proposition.
+    s = approveRequest(s, T2);
+    expect(s.request?.status).toBe("approved");
+    expect(canApproveFile(s).ok).toBe(false);
+    // The same draft, a second time, with no reviewer action in between.
+    s = replaceDraft(s, draftWithoutClaims(), T3);
+    const again = find(s, "rec:scheduling_prompt:noclaims")!;
+    expect(again.inRequest).toBe(false);
+    expect(again.state).toBe("proposed");
+    expect(canApproveFile(s).ok).toBe(false);
+  });
+
+  it("G02. the same, for a card that becomes readable again: a proposition nothing can be asked about is not carried by the open line", () => {
+    let s = buildReview(submission(), draft(RAW_DRAFT, TRUNCATED), NOW);
+    s = replaceDraft(s, draftWithoutClaims(), T1);
+    s = replaceDraft(s, draftWithoutClaims(), T2);
+    const p = find(s, "rec:scheduling_prompt:noclaims")!;
+    expect(p.inRequest).toBe(false);
+    expect(s.request?.items.some((i) => i.propositionId === p.id)).toBe(false);
+  });
+});
+
 describe("R6-R. a resolution holds for one submission; a proposition that comes back is asked through its open line", () => {
   it("R01. card resolved, the same draft run again: the card stays resolved and the request is not approved by reuse", () => {
     let s = cardResolved();

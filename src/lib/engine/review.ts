@@ -2012,7 +2012,10 @@ function merge(previous: Proposition[], fresh: Proposition[], now: string, becau
     // between): the resolution applies to it as to any other.
     if (!old) return { ...next, inRequest: next.requestable ? asked(undefined, next) : false };
     if (old.sourceKey === next.sourceKey) {
-      return { ...old, dependsOn: next.dependsOn, requestable: next.requestable, inRequest: asked(old, next), checked: next.checked };
+      // The same guard as the two other branches: a proposition the family cannot be asked about is never in the request,
+      // whatever the open line of its slot says. Without it, a second identical draft put an unrequestable proposition
+      // into an approved request, and the file became approvable without that proposition ever being reviewed.
+      return { ...old, dependsOn: next.dependsOn, requestable: next.requestable, inRequest: next.requestable ? asked(old, next) : false, checked: next.checked };
     }
     const changed: string[] = [];
     if ((old.history[0]?.statement ?? old.statement) !== (next.history[0]?.statement ?? next.statement)) changed.push("statement");
