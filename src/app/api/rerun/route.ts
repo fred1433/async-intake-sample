@@ -93,7 +93,11 @@ export async function POST(request: Request) {
     }
     if (error instanceof ProviderUnavailable) {
       return NextResponse.json(
-        { error: `A model provider did not answer. ${RECORDED_STAYS}` },
+        {
+          error: `The ${error.provider} provider did not answer. ${RECORDED_STAYS}`,
+          // Status and error class only: enough to tell a cap from an outage, never the provider's message.
+          detail: { provider: error.provider, status: error.status, kind: error.kind },
+        },
         { status: 503, headers: { "Retry-After": "600" } },
       );
     }

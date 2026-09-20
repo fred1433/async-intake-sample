@@ -10,7 +10,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import Anthropic, { APIError } from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
-import { GoogleGenAI } from "@google/genai";
+import { ApiError as GeminiApiError, GoogleGenAI } from "@google/genai";
 import { z } from "zod";
 import { RawDraft, RawTranscript } from "../engine/raw";
 import type { Draft, Transcript } from "../engine/types";
@@ -23,7 +23,18 @@ export const MAX_OUTPUT_TOKENS = 3000;
 
 export class ModelNotConfigured extends Error {}
 /** The call did not come back: no credit, no key accepted, no route, no answer. */
-export class ProviderUnavailable extends Error {}
+export class ProviderUnavailable extends Error {
+  constructor(
+    message: string,
+    /** Which of the two calls failed, and the HTTP status the provider gave, if any. Never the provider's words. */
+    public provider: "transcription" | "extraction",
+    public status: number | null = null,
+    public kind: string | null = null,
+  ) {
+    super(message);
+    this.name = "ProviderUnavailable";
+  }
+}
 /** The call came back, and the answer held nothing this page can read. */
 export class ModelAnswerUnusable extends Error {}
 
@@ -86,7 +97,9 @@ export async function transcribe(recording: SampleRecording): Promise<{ transcri
     };
   } catch (error) {
     console.error("The transcription call failed.", error);
-    throw new ProviderUnavailable("The transcription provider did not answer.");
+    const status = error instanceof GeminiApiError ? error.status : null;
+    const kind = error instanceof Error ? error.name : null;
+    throw new ProviderUnavailable("The transcription provider did not answer.", "transcription", status, kind);
   }
   let raw: RawTranscript;
   try {
@@ -130,8 +143,8 @@ export async function extract(
   } catch (error) {
     // What the provider says can name the account or the balance: it stays in the server log.
     console.error("The extraction call failed.", error);
-    if (error instanceof APIError) throw new ProviderUnavailable("The model provider did not answer the call.");
-    throw error;
+    if (error instanceof APIError) throw new ProviderUnavailable("The model provider did not answer the call.", "extraction", error.status ?? null, error.name);
+    throw new ProviderUnavailable("The model provider did not answer the call.", "extraction", null, error instanceof Error ? error.name : null);
   }
   if (!response.parsed_output) {
     console.error("The extraction answer could not be parsed.", response.stop_reason);
