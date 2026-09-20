@@ -129,14 +129,17 @@ export function PropositionDetail({
 
       {p.criterion && (
         <div className="mt-4 rounded-lg border border-line bg-white p-3">
-          <div className="flex items-start justify-between gap-3">
-            <div>
+          {/* On a phone the result sits above the text, so the rule keeps the full width of the card. */}
+          <div className="flex flex-col-reverse gap-2 md:flex-row md:items-start md:justify-between md:gap-3">
+            <div className="min-w-0">
               <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink-3">Criterion applied</p>
               <p className="mt-1 text-[14px] font-semibold text-ink">{p.criterion.label}</p>
               <p className="mt-0.5 text-[13px] text-ink-2">Rule: {p.criterion.rule}</p>
               {p.criterion.note && <p className="mt-1 text-[12.5px] text-ink-3">{p.criterion.note}</p>}
             </div>
-            <CriterionPill result={p.criterion.result} />
+            <span className="self-start">
+              <CriterionPill result={p.criterion.result} />
+            </span>
           </div>
         </div>
       )}
