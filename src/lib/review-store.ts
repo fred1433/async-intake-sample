@@ -16,7 +16,7 @@ import { sampleIntakeDraft } from "./intake-draft";
 import { SAMPLE_SUBMISSION } from "./sample";
 import { INTAKE_PREFIX, loadJSON, removeKey, REVIEW_KEY, saveJSON, SUBMISSION_KEY } from "./storage";
 
-export const RECORDED_DRAFT = recordedDraft as unknown as Draft;
+export const RECORDED_DRAFT = recordedDraft as Draft;
 
 export function currentSubmission(): Submission {
   return loadJSON<Submission>(SUBMISSION_KEY) ?? SAMPLE_SUBMISSION;

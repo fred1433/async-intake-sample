@@ -1,6 +1,6 @@
 {
   "origin": "recorded",
-  "computedAt": "2026-09-20T13:10:12.584Z",
+  "computedAt": "2026-09-20T15:09:47.874Z",
   "documents": [
     {
       "mediaId": "referral-letter",
@@ -14,7 +14,11 @@
           "normalized": "Sam Bennett",
           "page": 1,
           "quote": "Patient: Sam Bennett",
-          "uncertain": null
+          "uncertain": null,
+          "checked": [
+            "passage found on page 1",
+            "value found in the passage"
+          ]
         },
         {
           "key": "date_of_birth",
@@ -23,7 +27,12 @@
           "normalized": "2020-03-14",
           "page": 1,
           "quote": "Date of birth: March 14, 2020",
-          "uncertain": null
+          "uncertain": null,
+          "checked": [
+            "passage found on page 1",
+            "value found in the passage",
+            "date 2020-03-14 matches the passage"
+          ]
         },
         {
           "key": "guardian_name",
@@ -32,7 +41,11 @@
           "normalized": "Jordan Bennett",
           "page": 1,
           "quote": "Parent or guardian: Jordan Bennett",
-          "uncertain": null
+          "uncertain": null,
+          "checked": [
+            "passage found on page 1",
+            "value found in the passage"
+          ]
         },
         {
           "key": "referral_date",
@@ -41,7 +54,12 @@
           "normalized": "2026-08-28",
           "page": 1,
           "quote": "August 28, 2026",
-          "uncertain": null
+          "uncertain": null,
+          "checked": [
+            "passage found on page 1",
+            "value found in the passage",
+            "date 2026-08-28 matches the passage"
+          ]
         },
         {
           "key": "referring_provider",
@@ -50,7 +68,11 @@
           "normalized": "Alice Moreno, MD",
           "page": 1,
           "quote": "Alice Moreno, MD",
-          "uncertain": null
+          "uncertain": null,
+          "checked": [
+            "passage found on page 1",
+            "value found in the passage"
+          ]
         },
         {
           "key": "service_requested",
@@ -58,8 +80,12 @@
           "value": "applied behavior analysis (ABA) services",
           "normalized": null,
           "page": 1,
-          "quote": "Re: Referral for applied behavior analysis (ABA) services",
-          "uncertain": null
+          "quote": "I am referring Sam Bennett for an evaluation for applied behavior analysis (ABA) services.",
+          "uncertain": null,
+          "checked": [
+            "passage found on page 1",
+            "value found in the passage"
+          ]
         },
         {
           "key": "diagnosis_reference",
@@ -68,7 +94,11 @@
           "normalized": null,
           "page": 1,
           "quote": "the diagnosis listed on that evaluation is autism spectrum disorder (F84.0)",
-          "uncertain": null
+          "uncertain": null,
+          "checked": [
+            "passage found on page 1",
+            "value found in the passage"
+          ]
         }
       ]
     },
@@ -84,25 +114,37 @@
           "normalized": "Jordan Bennett",
           "page": 1,
           "quote": "Member: Jordan Bennett",
-          "uncertain": null
+          "uncertain": null,
+          "checked": [
+            "passage found on page 1",
+            "value found in the passage"
+          ]
         },
         {
           "key": "member_id",
           "label": "Member ID",
           "value": "SHP 4471 2290",
-          "normalized": "SHP44712290",
+          "normalized": null,
           "page": 1,
           "quote": "Member ID: SHP 4471 2290",
-          "uncertain": null
+          "uncertain": null,
+          "checked": [
+            "passage found on page 1",
+            "value found in the passage"
+          ]
         },
         {
           "key": "group_number",
           "label": "Group number",
           "value": "88213",
-          "normalized": "88213",
+          "normalized": null,
           "page": 1,
           "quote": "Group: 88213",
-          "uncertain": null
+          "uncertain": null,
+          "checked": [
+            "passage found on page 1",
+            "value found in the passage"
+          ]
         },
         {
           "key": "plan_name",
@@ -111,7 +153,11 @@
           "normalized": null,
           "page": 1,
           "quote": "Plan: Family Plus PPO",
-          "uncertain": null
+          "uncertain": null,
+          "checked": [
+            "passage found on page 1",
+            "value found in the passage"
+          ]
         },
         {
           "key": "dependent_name",
@@ -120,7 +166,11 @@
           "normalized": "Sam Bennett",
           "page": 1,
           "quote": "Dependent 01: Sam Bennett",
-          "uncertain": null
+          "uncertain": null,
+          "checked": [
+            "passage found on page 1",
+            "value found in the passage"
+          ]
         },
         {
           "key": "effective_date",
@@ -129,16 +179,25 @@
           "normalized": "2026-01-01",
           "page": 1,
           "quote": "Effective: 01/01/2026",
-          "uncertain": null
+          "uncertain": null,
+          "checked": [
+            "passage found on page 1",
+            "value found in the passage",
+            "date 2026-01-01 matches the passage"
+          ]
         },
         {
           "key": "member_services_phone",
           "label": "Member services phone",
           "value": "(800) 555-0121",
-          "normalized": "8005550121",
+          "normalized": null,
           "page": 2,
           "quote": "Member services: (800) 555-0121",
-          "uncertain": null
+          "uncertain": null,
+          "checked": [
+            "passage found on page 2",
+            "value found in the passage"
+          ]
         }
       ]
     }
@@ -151,12 +210,17 @@
         "segments": [
           {
             "start": 0,
-            "end": 4.88,
-            "text": "Hi. So Tuesdays work best for us, anytime after three."
+            "end": 1.1,
+            "text": "Hi."
           },
           {
-            "start": 5.1,
-            "end": 8.2,
+            "start": 1.1,
+            "end": 4.9,
+            "text": "So Tuesdays work best for us, anytime after 3:00."
+          },
+          {
+            "start": 4.9,
+            "end": 8.5,
             "text": "Not Thursdays, Sam has swimming on Thursdays."
           },
           {
@@ -172,44 +236,54 @@
           "key": "days_that_work",
           "label": "Days that work",
           "statement": "The parent states that Tuesdays work best for sessions.",
-          "nature": "extraction",
+          "nature": "rephrase",
           "segment": {
-            "start": 0,
-            "end": 4.88
+            "start": 1.1,
+            "end": 4.9
           },
-          "quote": "Tuesdays work best for us, anytime after three.",
+          "quote": "Tuesdays work best for us, anytime after 3:00.",
           "days": [
             "tuesday"
           ],
           "earliestHour": null,
           "location": null,
-          "uncertain": null
+          "uncertain": null,
+          "checked": [
+            "quoted words found in the recording at 1.1s to 4.9s",
+            "tuesday named in the quoted words, with no negation",
+            "the wording is the model's, not the quoted words: judge it against the recording"
+          ]
         },
         {
           "key": "time_window",
           "label": "Time window",
-          "statement": "The parent states that Tuesday sessions should be anytime after 3pm.",
-          "nature": "extraction",
+          "statement": "The parent states that on Tuesdays, any time after 3:00 works.",
+          "nature": "rephrase",
           "segment": {
-            "start": 0,
-            "end": 4.88
+            "start": 1.1,
+            "end": 4.9
           },
-          "quote": "anytime after three",
+          "quote": "Tuesdays work best for us, anytime after 3:00.",
           "days": [
             "tuesday"
           ],
           "earliestHour": 15,
           "location": null,
-          "uncertain": null
+          "uncertain": "The transcript does not specify whether 3:00 is AM or PM; 3:00 PM (15:00) was assumed based on context.",
+          "checked": [
+            "quoted words found in the recording at 1.1s to 4.9s",
+            "hour 15:00 named in the quoted words",
+            "the wording is the model's, not the quoted words: judge it against the recording"
+          ]
         },
         {
           "key": "days_that_do_not_work",
           "label": "Days that do not work",
           "statement": "The parent states that Thursdays do not work because Sam has swimming on Thursdays.",
-          "nature": "extraction",
+          "nature": "rephrase",
           "segment": {
-            "start": 5.1,
-            "end": 8.2
+            "start": 4.9,
+            "end": 8.5
           },
           "quote": "Not Thursdays, Sam has swimming on Thursdays.",
           "days": [
@@ -217,22 +291,32 @@
           ],
           "earliestHour": null,
           "location": null,
-          "uncertain": null
+          "uncertain": null,
+          "checked": [
+            "quoted words found in the recording at 4.9s to 8.5s",
+            "thursday named in the quoted words, with a negation",
+            "the wording is the model's, not the quoted words: judge it against the recording"
+          ]
         },
         {
           "key": "location_preference",
           "label": "Location preference",
-          "statement": "The parent states that they would rather do the sessions at home, if possible.",
-          "nature": "extraction",
+          "statement": "The parent states that they would rather do the sessions at home.",
+          "nature": "rephrase",
           "segment": {
             "start": 8.5,
             "end": 12.6
           },
-          "quote": "if it's possible, we would rather do the sessions at home",
+          "quote": "we would rather do the sessions at home",
           "days": [],
           "earliestHour": null,
           "location": "home",
-          "uncertain": "Stated as a preference contingent on possibility, not an absolute requirement."
+          "uncertain": null,
+          "checked": [
+            "quoted words found in the recording at 8.5s to 12.6s",
+            "place \"home\" named in the quoted words",
+            "the wording is the model's, not the quoted words: judge it against the recording"
+          ]
         }
       ]
     }

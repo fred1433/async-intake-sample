@@ -1,18 +1,18 @@
 {
-  "note": "Recorded run of the two model calls on the sample media, verified by the code. Served as is; no call happens when the page shows it.",
-  "recordedAt": "2026-09-20T13:10:12.584Z",
-  "elapsedMs": 19965,
+  "note": "Recorded run of the two model calls on the sample media, verified by the code. The draft next to this file is served as is; no call happens when the page shows it.",
+  "recordedAt": "2026-09-20T15:09:47.874Z",
+  "elapsedMs": 22833,
   "usage": {
     "transcription": {
       "model": "gemini-3.8-flash",
       "inputTokens": 363,
-      "outputTokens": 161
+      "outputTokens": 196
     },
     "extraction": {
       "model": "claude-sonnet-5",
-      "inputTokens": 5440,
-      "outputTokens": 1579,
-      "cacheReadInputTokens": 0
+      "inputTokens": 5505,
+      "outputTokens": 2500,
+      "cacheReadInputTokens": 1732
     }
   }
 }

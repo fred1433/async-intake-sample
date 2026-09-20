@@ -11,7 +11,7 @@ import type { Draft } from "../src/lib/engine/types";
 import { locateQuote, quoteIsOnPage } from "../src/lib/engine/verify";
 import { documentOf, pageText, SAMPLE_SUBMISSION } from "../src/lib/sample";
 
-const draft = recordedDraft as unknown as Draft;
+const draft = recordedDraft as Draft;
 
 describe("the recorded run", () => {
   it("says it is recorded, and when", () => {

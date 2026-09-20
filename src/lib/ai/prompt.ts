@@ -23,9 +23,10 @@ export function extractInstruction(documents: { mediaId: string; title: string; 
     for (const d of documents) lines.push(`- mediaId "${d.mediaId}": ${d.title}, ${d.pages} page${d.pages === 1 ? "" : "s"}.`);
     lines.push(
       "On a referral letter, look for: patient_name, date_of_birth, guardian_name, referral_date, referring_provider, service_requested, " +
-        "diagnosis_reference (only whether one is listed, quoted as written). On an insurance card: member_name, member_id, group_number, " +
-        "plan_name, dependent_name, effective_date, member_services_phone. Put dates in ISO form (YYYY-MM-DD) in normalized. " +
-        "If a document cannot be read, set readable to false and explain in unreadableReason.",
+        "diagnosis_reference (the diagnosis exactly as the letter writes it, copied from the quoted passage; nothing about it is assessed). " +
+        "On an insurance card: member_name, member_id, group_number, plan_name, dependent_name, effective_date, member_services_phone. " +
+        "In every field, value is the text as written in the document, copied from the quoted passage, never a summary. " +
+        "Put dates in ISO form (YYYY-MM-DD) in normalized. If a document cannot be read, set readable to false and explain in unreadableReason.",
     );
   }
   for (const t of transcripts) {

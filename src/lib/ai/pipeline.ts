@@ -23,7 +23,8 @@ import { documentOf, isKnownMedia, mediaOf, pageText, type SampleDocument, type 
 import { dict } from "../i18n";
 import { EXTRACT_SYSTEM, TRANSCRIBE_PROMPT, extractInstruction } from "./prompt";
 
-export const MAX_OUTPUT_TOKENS = 3000;
+/** Room for the model's reasoning as well as the structured answer: a bound of 3000 cut the JSON short on 20 September 2026. */
+export const MAX_OUTPUT_TOKENS = 8000;
 
 export class ModelNotConfigured extends Error {}
 /** The call did not come back: no credit, no key accepted, no route, no answer. */
@@ -161,6 +162,8 @@ export async function extract(
     // What the provider says can name the account or the balance: it stays in the server log.
     console.error("The extraction call failed.", error);
     if (error instanceof APIError) throw new ProviderUnavailable("The model provider did not answer the call.", "extraction", error.status ?? null, error.name);
+    // The call came back and its answer could not be parsed: a bad answer, not an outage.
+    if (error instanceof Error && /structured output/i.test(error.message)) throw new ModelAnswerUnusable("The answer held nothing this page can read.");
     throw new ProviderUnavailable("The model provider did not answer the call.", "extraction", null, error instanceof Error ? error.name : null);
   }
   if (!response.parsed_output) {
