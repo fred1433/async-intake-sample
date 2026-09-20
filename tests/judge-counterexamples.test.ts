@@ -17,6 +17,7 @@ import {
   canApproveFile,
   contentFingerprint,
   correct,
+  liveRunExpectation,
   replaceDraft,
 } from "../src/lib/engine/review";
 import type { ReviewState, Submission } from "../src/lib/engine/types";
@@ -175,7 +176,8 @@ describe("A. integrity of approvals and of the resume", () => {
 
   it("4. a live result is applied to the current file, so a correction made during the wait is kept; a result for another file is discarded", () => {
     const s0 = buildReview(submission(), draft(), NOW);
-    const expected = { reference: s0.submission.reference, media: mediaForLiveRun(s0.submission) };
+    const expected = liveRunExpectation(s0);
+    expect(expected.media).toEqual(mediaForLiveRun(s0.submission));
     const id = s0.propositions.find((p) => p.id.includes("days_that_work"))!.id;
     const s1 = correct(s0, id, "The parent states that Tuesdays work best, after 4 pm.", T1);
     const result = applyLiveRun(s1, expected, draft(RAW_DRAFT, undefined, "live"), T2);
@@ -375,7 +377,7 @@ describe("B. verification that must not produce false agreements", () => {
     expect(verified.withheld).toEqual([expect.objectContaining({ key: "other", reason: "clinical_content" })]);
   });
 
-  it("11b. a free-field statement its quote does not support is withheld too", () => {
+  it("11b. a free-field statement its quote does not support is withheld too (since the second round, every free statement is: it is listed, never assessed)", () => {
     const raw = structuredClone(RAW_DRAFT);
     raw.recordings[0].claims.push({
       key: "other",
@@ -389,6 +391,6 @@ describe("B. verification that must not produce false agreements", () => {
       uncertain: null,
     });
     const verified = verifyDraft(raw, sources(), { origin: "recorded", computedAt: NOW });
-    expect(verified.withheld).toEqual([expect.objectContaining({ key: "other", reason: "statement_unsupported" })]);
+    expect(verified.withheld).toEqual([expect.objectContaining({ key: "other", reason: "free_statement" })]);
   });
 });

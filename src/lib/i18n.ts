@@ -156,6 +156,13 @@ const en = {
     confirmDaysUnmentioned: (formDays: string, recordedDays: string) =>
       `your form lists ${formDays}, and your recorded answer mentions ${recordedDays || "other days"}. Which days should we plan on?`,
     confirmDaysNone: (recordedDays: string) => `your form lists no day, and your recorded answer mentions ${recordedDays || "some days"}. Which days should we plan on?`,
+    /** The form's time option as a phrase inside a sentence ("your form says in the morning"). */
+    timePhrase: {
+      morning: "in the morning",
+      early_afternoon: "in the early afternoon",
+      after_3pm: "after 3 pm",
+      evening: "in the evening",
+    } as Record<string, string>,
     confirmTime: (formTime: string, recordedHour: string) =>
       `your form says ${formTime}, and your recorded answer says from ${recordedHour}. Which time of day should we plan on?`,
     confirmTimeUnknown: (formTime: string) => `your form says ${formTime}; could you confirm the time of day that works for you?`,
@@ -317,6 +324,13 @@ const es: Dict = {
       `su formulario indica ${formDays.toLowerCase()}, y en su respuesta grabada menciona ${recordedDays ? `los ${recordedDays.toLowerCase()}` : "otros días"}. ¿Con qué días debemos contar?`,
     confirmDaysNone: (recordedDays: string) =>
       `su formulario no indica ningún día, y en su respuesta grabada menciona ${recordedDays ? `los ${recordedDays.toLowerCase()}` : "algunos días"}. ¿Con qué días debemos contar?`,
+    /** "por la mañana", never "mañana" alone, which would read as tomorrow. */
+    timePhrase: {
+      morning: "por la mañana",
+      early_afternoon: "temprano en la tarde",
+      after_3pm: "después de las 3 pm",
+      evening: "por la noche",
+    },
     confirmTime: (formTime: string, recordedHour: string) =>
       `su formulario indica ${formTime}, y en su respuesta grabada dice a partir de las ${recordedHour}. ¿En qué momento del día debemos planificar las sesiones?`,
     confirmTimeUnknown: (formTime: string) => `su formulario indica ${formTime}; ¿podría confirmar el momento del día que le conviene?`,

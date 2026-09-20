@@ -2,19 +2,23 @@
  * Turns a raw model draft into a Draft the page can show.
  *
  * A field must quote a passage that exists on the page it names, its value
- * must be in that passage, and a machine-form date must match a date written
- * in the passage. A claim must quote words that exist in the transcript; its
- * audio window is located by the code from those words inside the timestamps
- * the transcription returned, and checked against the length of the recording;
- * the days, hour and place it carries must be in the quoted words, with the
- * negation kept; a free statement must stay administrative and be supported
- * by its quote. Anything that fails is withheld, listed, and never shown as a
- * finding. A claim with no source at all is refused the same way.
+ * must be in that passage as one contiguous run of words, and a machine-form
+ * date must be the date written in the value, on a real calendar. A claim must
+ * quote words that exist in the transcript; its audio window is located by the
+ * code from those words inside the timestamps the transcription returned, and
+ * checked against the length of the recording. The days, hour and place it
+ * carries are checked in the source clause the quoted words come from, not
+ * only in the words the model chose to quote, so a negation the quote left out
+ * still counts. An hour is established only when the words give its value, AM
+ * or PM, and "from": anything less is kept as something to confirm and is
+ * never compared. A free statement (other) is never assessed: it is listed
+ * for the reviewer. Anything that fails is withheld, listed, and never shown
+ * as a finding. A claim with no source at all is refused the same way.
  *
  * What the code cannot check is the wording of a rephrase: the claim says so,
  * and the reviewer judges it against the recording.
  */
-import type { RawDraft, RawTranscript } from "./raw";
+import type { RawClaim, RawDraft, RawTranscript } from "./raw";
 import type { Day, Draft, DocumentExtraction, ExtractedField, RecordingClaim, RecordingReview, Transcript, TranscriptSegment, Withheld } from "./types";
 
 export interface DocumentSource {
@@ -41,29 +45,38 @@ export function normalize(text: string): string {
     .trim();
 }
 
-/** Strips punctuation for a looser comparison of spoken words. */
+/** Strips punctuation for a looser comparison of spoken words. Apostrophes and the colon of a clock time stay. */
 export function spokenForm(text: string): string {
   return normalize(text)
-    .replace(/[^\p{L}\p{N}\s']/gu, " ")
+    .replace(/\b([ap])\.\s?m\.?(?=[\s,.;!?)]|$)/g, "$1m")
+    .replace(/[^\p{L}\p{N}\s':]/gu, " ")
+    .replace(/(?<!\d):|:(?!\d)/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
 
-/** Words of a text, lowercased, without punctuation. */
+/** Words of a text, lowercased, without punctuation; an apostrophe inside a word is kept (don't, it's). */
 export function words(text: string): string[] {
-  return spokenForm(text).replace(/'/g, " ").split(" ").filter(Boolean);
+  return spokenForm(text)
+    .split(" ")
+    .map((w) => w.replace(/^'+|'+$/g, ""))
+    .filter(Boolean);
 }
 
-/** True when every word of needle appears in hay, in the same order. */
-export function wordsInOrder(needle: string[], hay: string[]): boolean {
-  if (needle.length === 0) return false;
-  let at = 0;
-  for (const word of needle) {
-    const found = hay.indexOf(word, at);
-    if (found === -1) return false;
-    at = found + 1;
+/** Index at which the words of needle appear in hay, contiguous and in order; -1 when they do not. */
+export function indexOfWords(needle: string[], hay: string[], from = 0): number {
+  if (needle.length === 0 || needle.length > hay.length) return -1;
+  for (let i = Math.max(0, from); i + needle.length <= hay.length; i++) {
+    let j = 0;
+    while (j < needle.length && hay[i + j] === needle[j]) j++;
+    if (j === needle.length) return i;
   }
-  return true;
+  return -1;
+}
+
+/** True when the words of needle appear in hay as one contiguous run. */
+export function wordsContiguous(needle: string[], hay: string[]): boolean {
+  return indexOfWords(needle, hay) !== -1;
 }
 
 export function quoteIsOnPage(quote: string, pageText: string): boolean {
@@ -88,12 +101,20 @@ const MONTHS: Record<string, number> = {
   december: 12, dec: 12, diciembre: 12, dic: 12,
 };
 
-function isoDate(year: number, month: number, day: number): string | null {
-  if (month < 1 || month > 12 || day < 1 || day > 31 || year < 1000 || year > 9999) return null;
+function daysInMonth(year: number, month: number): number {
+  if (month === 2) return (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0 ? 29 : 28;
+  return [4, 6, 9, 11].includes(month) ? 30 : 31;
+}
+
+/** A calendar date that exists, in ISO form; null for February 31 and the like. */
+export function isoDate(year: number, month: number, day: number): string | null {
+  if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) return null;
+  if (month < 1 || month > 12 || year < 1000 || year > 9999) return null;
+  if (day < 1 || day > daysInMonth(year, month)) return null;
   return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 
-/** Every calendar date written in a text, in ISO form, in order of appearance. */
+/** Every calendar date written in a text, in ISO form, in order of appearance. A date that does not exist is not a date. */
 export function datesIn(text: string): string[] {
   const out: string[] = [];
   const lower = text.normalize("NFKC").toLowerCase();
@@ -117,35 +138,64 @@ const DATE_KEYS = new Set(["date_of_birth", "referral_date", "effective_date"]);
 
 const alnum = (text: string) => text.normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
 
-/* ---------- Audio windows ---------- */
+/* ---------- The transcript as tokens, with their segment and their clause ---------- */
+
+interface Token {
+  word: string;
+  segment: number;
+  clause: number;
+}
+
+/** Clause boundaries: punctuation that is not the colon of a clock time, and "but". */
+const CLAUSE_BREAK = /[,.;!?()]+|(?<!\d):|:(?!\d)|\bbut\b|\bpero\b/;
+
+function tokenize(segments: TranscriptSegment[]): Token[] {
+  const tokens: Token[] = [];
+  let clause = 0;
+  segments.forEach((segment, index) => {
+    const text = normalize(segment.text).replace(/\b([ap])\.\s?m\.?(?=[\s,.;!?)]|$)/g, "$1m");
+    for (const piece of text.split(CLAUSE_BREAK)) {
+      const list = words(piece);
+      if (list.length === 0) continue;
+      for (const word of list) tokens.push({ word, segment: index, clause });
+      clause += 1;
+    }
+  });
+  return tokens;
+}
+
+export interface LocatedQuote {
+  start: number;
+  end: number;
+  /** The full clauses the quoted words come from, as word lists: what the parent said around the quote. */
+  clauses: string[][];
+}
 
 /**
- * Finds the transcript segments that carry the quoted words, in order, and
- * returns the audio window they span. Null when the words are not there. The
- * timestamps are the transcription's; the window is chosen by the code.
+ * Finds the quoted words in the transcript, as one contiguous run of words,
+ * and returns the audio window of the segments they span and the clauses they
+ * come from. Null when the words are not there. The timestamps are the
+ * transcription's; the window is chosen by the code.
  */
-export function locateQuote(quote: string, segments: TranscriptSegment[]): { start: number; end: number } | null {
-  const needle = spokenForm(quote);
-  if (!needle) return null;
-  const parts = segments.map((s) => spokenForm(s.text));
-  let offset = 0;
-  const bounds: { from: number; to: number }[] = [];
-  for (const part of parts) {
-    bounds.push({ from: offset, to: offset + part.length });
-    offset += part.length + 1;
-  }
-  const joined = parts.join(" ");
-  const at = joined.indexOf(needle);
+export function locateWords(quote: string, segments: TranscriptSegment[]): LocatedQuote | null {
+  const needle = words(quote);
+  const tokens = tokenize(segments);
+  const at = indexOfWords(
+    needle,
+    tokens.map((t) => t.word),
+  );
   if (at === -1) return null;
-  const endAt = at + needle.length;
-  let first = -1;
-  let last = -1;
-  bounds.forEach((b, i) => {
-    if (first === -1 && at < b.to && endAt > b.from) first = i;
-    if (at < b.to && endAt > b.from) last = i;
-  });
-  if (first === -1 || last === -1) return null;
-  return { start: segments[first].start, end: segments[last].end };
+  const span = tokens.slice(at, at + needle.length);
+  const first = span[0].segment;
+  const last = span[span.length - 1].segment;
+  const clauseIds = [...new Set(span.map((t) => t.clause))];
+  const clauses = clauseIds.map((id) => tokens.filter((t) => t.clause === id).map((t) => t.word));
+  return { start: segments[first].start, end: segments[last].end, clauses };
+}
+
+export function locateQuote(quote: string, segments: TranscriptSegment[]): { start: number; end: number } | null {
+  const located = locateWords(quote, segments);
+  return located ? { start: located.start, end: located.end } : null;
 }
 
 /**
@@ -179,7 +229,7 @@ export function transcriptFromRaw(mediaId: string, raw: RawTranscript, durationS
   return { mediaId, segments, unusable, ...(outOfRange > 0 ? { outOfRange } : {}) };
 }
 
-/* ---------- Days, hours, places and negations in spoken words ---------- */
+/* ---------- Days, hours, places and negations in the spoken clauses ---------- */
 
 const DAY_WORDS: Record<Day, string[]> = {
   monday: ["monday", "mondays", "mon", "lunes"],
@@ -192,42 +242,133 @@ const DAY_WORDS: Record<Day, string[]> = {
 };
 
 const NEGATIONS = new Set([
-  "not", "no", "never", "cannot", "except", "impossible", "unable", "avoid", "without",
-  "nunca", "tampoco", "excepto", "imposible", "jamas", "jamás",
+  "not", "no", "never", "cannot", "except", "impossible", "unable", "avoid", "without", "neither", "nor",
+  "dont", "doesnt", "cant", "wont", "isnt", "arent", "couldnt", "wouldnt", "shouldnt",
+  "nunca", "tampoco", "excepto", "imposible", "jamas", "jamás", "ni", "sin",
 ]);
 
-/** Clauses of a quote: the pieces between commas, periods and the like, as word lists. */
-function clauses(quote: string): string[][] {
-  return normalize(quote)
-    .split(/[,.;:!?()]+|\bbut\b|\bpero\b/)
-    .map((piece) => words(piece))
-    .filter((piece) => piece.length > 0);
+function mentionsDay(clause: string[], day: Day): boolean {
+  return clause.some((w) => DAY_WORDS[day].includes(w));
 }
 
-function mentionsDay(piece: string[], day: Day): boolean {
-  return piece.some((w) => DAY_WORDS[day].includes(w));
-}
-
-function negated(piece: string[]): boolean {
-  return piece.some((w) => NEGATIONS.has(w) || w.endsWith("n't") || w === "dont" || w === "doesnt" || w === "cant" || w === "wont" || w === "isnt" || w === "arent");
+function negated(clause: string[]): boolean {
+  return clause.some((w) => NEGATIONS.has(w) || w.endsWith("n't"));
 }
 
 const NUMBER_WORDS: Record<string, number> = {
   zero: 0, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12,
-  noon: 12, midday: 12, midnight: 0,
-  uno: 1, una: 1, dos: 2, tres: 3, cuatro: 4, cinco: 5, seis: 6, siete: 7, ocho: 8, nueve: 9, diez: 10, once: 11, doce: 12, mediodia: 12, mediodía: 12,
+  uno: 1, una: 1, dos: 2, tres: 3, cuatro: 4, cinco: 5, seis: 6, siete: 7, ocho: 8, nueve: 9, diez: 10, once: 11, doce: 12,
 };
 
-/** True when the hour (24-hour) is named in the words, as a digit or a number word, on the 12-hour clock. */
-function hourNamed(quote: string, hour: number): boolean {
-  const target = ((hour % 12) + 12) % 12;
-  for (const w of words(quote)) {
-    const digits = w.match(/^(\d{1,2})(?::\d{2})?(am|pm)?$/);
-    if (digits && Number(digits[1]) % 12 === target) return true;
-    if (w in NUMBER_WORDS && NUMBER_WORDS[w] % 12 === target) return true;
-  }
-  return false;
+const FROM_WORDS = new Set(["after", "from", "starting", "past", "beginning", "onwards", "onward", "desde", "después", "despues", "partir", "luego"]);
+const BEFORE_WORDS = new Set(["before", "until", "till", "by", "antes", "hasta"]);
+const AT_WORDS = new Set(["at", "around", "about", "las", "la"]);
+
+export interface HourMention {
+  /** The words the hour was read from, as spoken. */
+  text: string;
+  /** 0 to 11: the value on a 12-hour clock. */
+  hour12: number;
+  /** The 24-hour value when AM or PM (or a 24-hour figure) is in the words; null when the period is not said. */
+  hour24: number | null;
+  relation: "from" | "before" | "at" | null;
 }
+
+const PERIOD_PATTERNS: { re: RegExp; period: "am" | "pm"; length: number }[] = [
+  { re: /^am\b/, period: "am", length: 1 },
+  { re: /^pm\b/, period: "pm", length: 1 },
+  { re: /^a m\b/, period: "am", length: 2 },
+  { re: /^p m\b/, period: "pm", length: 2 },
+  { re: /^in the morning\b/, period: "am", length: 3 },
+  { re: /^de la (mañana|manana)\b/, period: "am", length: 3 },
+  { re: /^in the (afternoon|evening)\b/, period: "pm", length: 3 },
+  { re: /^de la (tarde|noche)\b/, period: "pm", length: 3 },
+  { re: /^at night\b/, period: "pm", length: 2 },
+  { re: /^tonight\b/, period: "pm", length: 1 },
+];
+
+/** Every clock hour named in a clause, with what the words say about its period and its relation. */
+export function hoursIn(clause: string[]): HourMention[] {
+  const out: HourMention[] = [];
+  clause.forEach((word, i) => {
+    let value: number | null = null;
+    let period: "am" | "pm" | null = null;
+    const digits = word.match(/^(\d{1,2})(?::(\d{2}))?(am|pm)?$/);
+    if (digits) {
+      const h = Number(digits[1]);
+      const minutes = digits[2] !== undefined ? Number(digits[2]) : 0;
+      // A lone "00" or "30" is a minute figure, not an hour; anything past 23 is not a clock hour.
+      if (digits[1].length === 2 && digits[1].startsWith("0") && digits[2] === undefined && !digits[3]) return;
+      if (h > 23 || minutes > 59) return;
+      value = h;
+      if (digits[3]) period = digits[3] as "am" | "pm";
+      else if (h > 12 || h === 0) period = h >= 12 ? "pm" : "am";
+    } else if (word === "noon" || word === "midday" || word === "mediodia" || word === "mediodía") {
+      value = 12;
+      period = "pm";
+    } else if (word === "midnight" || word === "medianoche") {
+      value = 0;
+      period = "am";
+    } else if (word in NUMBER_WORDS) {
+      // "once" is Spanish for eleven and an English adverb: only count it after "las" or "la".
+      if (word === "once" && !clause.slice(Math.max(0, i - 2), i).some((w) => w === "las" || w === "la")) return;
+      value = NUMBER_WORDS[word];
+    }
+    if (value === null) return;
+    let after = clause.slice(i + 1, i + 6);
+    const extra: string[] = [];
+    if (after[0] === "o'clock" || after[0] === "oclock") {
+      extra.push(after[0]);
+      after = after.slice(1);
+    }
+    if (!period) {
+      const next = after.join(" ");
+      const match = PERIOD_PATTERNS.find((p) => p.re.test(next));
+      if (match) {
+        period = match.period;
+        extra.push(...after.slice(0, match.length));
+      }
+    }
+    const before = clause.slice(Math.max(0, i - 4), i);
+    let relation: HourMention["relation"] = null;
+    for (let j = before.length - 1; j >= 0 && relation === null; j--) {
+      const w = before[j];
+      if (FROM_WORDS.has(w)) relation = "from";
+      else if (BEFORE_WORDS.has(w)) relation = "before";
+      else if (AT_WORDS.has(w)) relation = "at";
+    }
+    const hour12 = value % 12;
+    const hour24 = period === null ? null : period === "pm" ? hour12 + 12 : hour12;
+    out.push({ text: [word, ...extra].join(" "), hour12, hour24, relation });
+  });
+  return out;
+}
+
+export type HourCheck =
+  | { status: "verified"; mention: HourMention }
+  | { status: "period_missing"; mention: HourMention }
+  | { status: "relation_missing"; mention: HourMention }
+  | { status: "not_earliest"; mention: HourMention }
+  | { status: "period_mismatch"; mention: HourMention }
+  | { status: "not_named" }
+  | { status: "invalid" };
+
+/** What the spoken clauses establish about a 24-hour earliest hour the model structured. */
+export function checkHour(hour: number, clauses: string[][]): HourCheck {
+  if (!Number.isInteger(hour) || hour < 0 || hour > 23) return { status: "invalid" };
+  const mentions = clauses.flatMap(hoursIn);
+  const exact = mentions.find((m) => m.hour24 === hour);
+  const ambiguous = mentions.find((m) => m.hour24 === null && m.hour12 === hour % 12);
+  const mismatch = mentions.find((m) => m.hour24 !== null && m.hour24 !== hour && m.hour12 === hour % 12);
+  const mention = exact ?? ambiguous;
+  if (!mention) return mismatch ? { status: "period_mismatch", mention: mismatch } : { status: "not_named" };
+  if (mention.relation === "before") return { status: "not_earliest", mention };
+  if (mention.hour24 === null) return { status: "period_missing", mention };
+  if (mention.relation !== "from") return { status: "relation_missing", mention };
+  return { status: "verified", mention };
+}
+
+const clock = (hour: number) => `${String(hour).padStart(2, "0")}:00`;
 
 const PLACE_WORDS: Record<"home" | "center" | "either", string[]> = {
   home: ["home", "house", "casa", "hogar", "domicilio"],
@@ -235,37 +376,14 @@ const PLACE_WORDS: Record<"home" | "center" | "either", string[]> = {
   either: ["either", "both", "anywhere", "wherever", "cualquiera", "cualquier", "ambos", "dos", "donde", "sea"],
 };
 
-function placeNamed(quote: string, place: "home" | "center" | "either"): boolean {
-  const list = words(quote);
-  return PLACE_WORDS[place].some((w) => list.includes(w));
+function placeClauses(clauses: string[][], place: "home" | "center" | "either"): string[][] {
+  return clauses.filter((clause) => PLACE_WORDS[place].some((w) => clause.includes(w)));
 }
 
 /** Words that would make a statement clinical. Nothing clinical is assessed here, so such a statement is withheld. */
-const CLINICAL = /\b(autis\w*|asd|diagnos\w*|disorder\w*|spectrum|symptom\w*|sever(?:e|ity)|meltdown\w*|tantrum\w*|aggress\w*|self[- ]?injur\w*|eligib\w*|therap\w*|medicat\w*|seizure\w*|adhd|anxiety|anxious|depress\w*|cognitive|developmental|delay\w*|non[- ]?verbal|regress\w*|sensory|prognos\w*|treatment|hours (?:of|a|per) week|units)\b/i;
+const CLINICAL = /\b(autis\w*|asd|diagnos\w*|disorder\w*|spectrum|symptom\w*|sever(?:e|ity)|meltdown\w*|tantrum\w*|aggress\w*|self[- ]?injur\w*|eligib\w*|therap\w*|medicat\w*|seizure\w*|adhd|anxiety|anxious|depress\w*|cognitive|developmental|delay\w*|non[- ]?verbal|regress\w*|sensory|prognos\w*|treatment|cur(?:e|es|ed|ing)|heal\w*|improv\w*|behavio\w*|hours (?:of|a|per) week|units)\b/i;
 
 const ATTRIBUTION = /^(the (parent|family|guardian|caregiver) (states|says|said|reports|mentions|notes|explains|indicates) (that )?)/i;
-
-const STOPWORDS = new Set([
-  "the", "a", "an", "and", "or", "of", "to", "for", "in", "on", "at", "is", "are", "be", "that", "this", "it", "its", "they", "their", "we", "our", "us",
-  "if", "so", "as", "with", "would", "rather", "do", "does", "did", "have", "has", "will", "can", "any", "some", "there", "here", "about", "from",
-]);
-
-function contentWords(text: string): string[] {
-  return words(text.replace(ATTRIBUTION, "")).filter((w) => !STOPWORDS.has(w) && w.length > 1);
-}
-
-function stem(w: string): string {
-  return w.length > 5 ? w.slice(0, 5) : w.replace(/s$/, "");
-}
-
-/** Share of the statement's content words that are in the quoted words, on a crude stem. */
-export function statementSupport(statement: string, quote: string): number {
-  const content = contentWords(statement);
-  if (content.length === 0) return 0;
-  const quoted = new Set(words(quote).map(stem));
-  const found = content.filter((w) => quoted.has(stem(w))).length;
-  return found / content.length;
-}
 
 /** True when the statement, without its attribution, is the quoted words themselves. */
 function isVerbatim(statement: string, quote: string): boolean {
@@ -275,10 +393,197 @@ function isVerbatim(statement: string, quote: string): boolean {
 
 /* ---------- The check ---------- */
 
+function checkDocument(doc: RawDraft["documents"][number], source: DocumentSource, hold: (key: string, label: string, page: number, reason: Withheld["reason"], detail: string) => void): DocumentExtraction {
+  const fields: ExtractedField[] = [];
+  for (const field of doc.fields) {
+    const quote = field.quote.trim();
+    const refuse = (reason: Withheld["reason"], detail: string) => hold(field.key, field.label, field.page, reason, detail);
+    if (!quote) {
+      refuse("no_source", `"${field.label}" came with no passage to check.`);
+      continue;
+    }
+    const pageText = source.pages[field.page];
+    if (!pageText || !quoteIsOnPage(quote, pageText)) {
+      refuse("quote_not_found", `"${field.label}": the quoted passage is not on page ${field.page}.`);
+      continue;
+    }
+    const checked = [`passage found on page ${field.page}`];
+    const value = field.value.trim();
+    if (!wordsContiguous(words(value), words(quote))) {
+      refuse("value_not_in_quote", `"${field.label}": the value "${value}" is not in the quoted passage as one run of words.`);
+      continue;
+    }
+    checked.push("value found in the passage, as one run of words");
+    let normalized = field.normalized?.trim() || null;
+    if (DATE_KEYS.has(field.key)) {
+      const written = datesIn(value);
+      if (normalized) {
+        if (!written.includes(normalized)) {
+          refuse(
+            "normalized_mismatch",
+            `"${field.label}": the machine-form date ${normalized} is not the date written in the value "${value}"${written.length ? ` (which reads ${written.join(", ")})` : " (no calendar date the code can read)"}.`,
+          );
+          continue;
+        }
+        checked.push(`date ${normalized} is the date written in the value`);
+      } else if (written.length === 1) {
+        normalized = written[0];
+        checked.push(`date ${normalized} read from the value by the code`);
+      } else {
+        checked.push("no machine-form date: the rule will say it cannot be assessed");
+      }
+    } else if (normalized && alnum(normalized) !== alnum(value)) {
+      checked.push(`machine form "${normalized}" dropped: it does not match the value`);
+      normalized = null;
+    }
+    fields.push({ key: field.key, label: field.label, value, normalized, page: field.page, quote, uncertain: field.uncertain?.trim() || null, checked });
+  }
+  return { mediaId: doc.mediaId, readable: doc.readable, unreadableReason: doc.unreadableReason?.trim() || null, fields };
+}
+
+function checkClaim(claim: RawClaim, source: RecordingSource, hold: (reason: Withheld["reason"], detail: string) => void): RecordingClaim | null {
+  const quote = claim.quote.trim();
+  if (!quote) {
+    hold("no_source", `"${claim.label}" came with no words to check.`);
+    return null;
+  }
+  const located = locateWords(quote, source.transcript.segments);
+  if (!located) {
+    const dropped = source.transcript.outOfRange;
+    hold(
+      "segment_not_found",
+      `"${claim.label}": the quoted words are not in the transcript${dropped ? ` (${dropped} transcription segment${dropped === 1 ? "" : "s"} fell outside the recording and ${dropped === 1 ? "was" : "were"} dropped)` : ""}.`,
+    );
+    return null;
+  }
+  const duration = source.durationSeconds;
+  if (located.start < 0 || located.end <= located.start || (duration > 0 && located.end > duration)) {
+    hold("segment_out_of_range", `"${claim.label}": the audio window ${located.start}s to ${located.end}s does not fit a recording of ${duration}s.`);
+    return null;
+  }
+  const checked = [`quoted words found in the recording at ${located.start.toFixed(1)}s to ${located.end.toFixed(1)}s`];
+  const clinical = [claim.statement, claim.label, claim.uncertain ?? ""].join(" ").match(CLINICAL);
+  if (clinical) {
+    hold("clinical_content", `"${claim.label}": the statement goes beyond scheduling and administrative facts ("${clinical[0]}"). Nothing clinical is assessed here.`);
+    return null;
+  }
+  if (claim.key === "other") {
+    hold("free_statement", `"${claim.label}": a free statement is not assessed by the code. The quoted words are "${quote}"; the reviewer reads them.`);
+    return null;
+  }
+  const clauses = located.clauses;
+  const spoken = clauses.map((c) => c.join(" ")).join(" / ");
+  checked.push(`checked in the spoken clause${clauses.length > 1 ? "s" : ""} "${spoken}"`);
+  let days: Day[] = [];
+  let earliestHour: number | null = null;
+  let location: RecordingClaim["location"] = null;
+  const unresolved: string[] = [];
+
+  const checkDays = (wantNegation: boolean): string | null => {
+    for (const day of claim.days) {
+      const mentioning = clauses.filter((clause) => mentionsDay(clause, day));
+      if (mentioning.length === 0) return `structured_not_in_quote:${day} is not named in the spoken clause`;
+      const negatedMention = mentioning.some(negated);
+      if (wantNegation && !negatedMention) return `negation_mismatch:the spoken words do not say that ${day} does not work`;
+      if (!wantNegation && negatedMention) return `negation_mismatch:the spoken words negate ${day}`;
+      checked.push(`${day} named in the spoken clause, ${negatedMention ? "with a negation" : "with no negation"}`);
+    }
+    days = [...claim.days];
+    if (claim.days.length === 0) checked.push("no day named in the structured part");
+    return null;
+  };
+
+  const hourDetail = (check: HourCheck, hour: number): string => {
+    switch (check.status) {
+      case "invalid":
+        return `${hour} is not an hour of the day`;
+      case "not_named":
+        return `the hour ${clock(hour)} is not named in the spoken clause`;
+      case "period_mismatch":
+        return `the spoken words say "${check.mention.text}", not ${clock(hour)}`;
+      case "not_earliest":
+        return `the spoken words say "${check.mention.text}" as a limit, not as an hour to start from`;
+      case "period_missing":
+        return `"${check.mention.text}" is named without AM or PM`;
+      case "relation_missing":
+        return `"${check.mention.text}" is named without saying from when`;
+      default:
+        return "";
+    }
+  };
+
+  let refused: string | null = null;
+  if (claim.key === "days_that_work" || claim.key === "days_that_do_not_work") {
+    refused = checkDays(claim.key === "days_that_do_not_work");
+    if (!refused && claim.earliestHour !== null) {
+      const check = checkHour(claim.earliestHour, clauses);
+      if (check.status === "verified") {
+        earliestHour = claim.earliestHour;
+        checked.push(`hour ${clock(claim.earliestHour)} established from "${check.mention.text}"`);
+      } else checked.push(`hour ${clock(claim.earliestHour)} dropped: ${hourDetail(check, claim.earliestHour)}`);
+    }
+    if (!refused && claim.location) {
+      const named = placeClauses(clauses, claim.location);
+      if (named.length > 0 && !named.some(negated)) location = claim.location;
+      else checked.push(`place "${claim.location}" dropped: ${named.length === 0 ? "not named in the spoken clause" : "the spoken words negate it"}`);
+    }
+  } else if (claim.key === "time_window") {
+    if (claim.earliestHour !== null) {
+      const check = checkHour(claim.earliestHour, clauses);
+      if (check.status === "verified") {
+        earliestHour = claim.earliestHour;
+        checked.push(`hour ${clock(claim.earliestHour)} established from "${check.mention.text}": value, AM or PM, and "from" all in the spoken words`);
+      } else if (check.status === "period_missing" || check.status === "relation_missing") {
+        unresolved.push(`${hourDetail(check, claim.earliestHour)}: ${clock(claim.earliestHour)} is the model's reading and is not compared with the form.`);
+        checked.push(`hour ${clock(claim.earliestHour)} not established: ${hourDetail(check, claim.earliestHour)}`);
+      } else refused = `structured_not_in_quote:${hourDetail(check, claim.earliestHour)}`;
+    } else checked.push("no hour in the structured part: the rule will say it cannot compare");
+    days = claim.days.filter((day) => clauses.some((clause) => mentionsDay(clause, day) && !negated(clause)));
+    if (days.length < claim.days.length) checked.push("days not named without negation in the spoken clause dropped");
+  } else if (claim.key === "location_preference") {
+    if (claim.location !== null) {
+      const named = placeClauses(clauses, claim.location);
+      if (named.length === 0) refused = `structured_not_in_quote:the place "${claim.location}" is not named in the spoken clause`;
+      else if (named.some(negated)) refused = `negation_mismatch:the spoken words negate the place "${claim.location}"`;
+      else {
+        location = claim.location;
+        checked.push(`place "${claim.location}" named in the spoken clause, with no negation`);
+      }
+    } else checked.push("no place in the structured part: the rule will say it cannot compare");
+  }
+
+  if (refused) {
+    const colon = refused.indexOf(":");
+    hold(refused.slice(0, colon) as Withheld["reason"], `"${claim.label}": ${refused.slice(colon + 1)}.`);
+    return null;
+  }
+
+  const verbatim = isVerbatim(claim.statement, quote);
+  const nature = claim.nature === "extraction" && !verbatim ? "rephrase" : claim.nature;
+  if (nature === "extraction") checked.push("the statement is the quoted words");
+  else checked.push("the wording is the model's, not the quoted words: judge it against the recording");
+
+  return {
+    key: claim.key,
+    label: claim.label,
+    statement: claim.statement.trim(),
+    nature,
+    segment: { start: located.start, end: located.end },
+    quote,
+    days,
+    earliestHour,
+    location,
+    proposed: { days: [...claim.days], earliestHour: claim.earliestHour, location: claim.location },
+    uncertain: claim.uncertain?.trim() || null,
+    unresolved: unresolved.length > 0 ? unresolved.join(" ") : null,
+    checked,
+  };
+}
+
 export function verifyDraft(
   raw: RawDraft,
   sources: { documents: DocumentSource[]; recordings: RecordingSource[] },
-  meta: { origin: Draft["origin"]; computedAt: string },
+  meta: { origin: Draft["origin"]; computedAt: string; transcriptReused?: boolean },
 ): Draft {
   const withheld: Withheld[] = [];
   const documents: DocumentExtraction[] = [];
@@ -287,175 +592,22 @@ export function verifyDraft(
   for (const doc of raw.documents) {
     const source = sources.documents.find((d) => d.mediaId === doc.mediaId);
     if (!source) {
-      withheld.push({ mediaId: doc.mediaId, key: "*", label: "Document", reason: "unknown_media", detail: "The draft names a document this file does not hold." });
+      withheld.push({ mediaId: doc.mediaId, key: "*", label: "Document", reason: "unknown_media", detail: `The draft names a document this file does not hold ("${doc.mediaId}").` });
       continue;
     }
-    const fields: ExtractedField[] = [];
-    for (const field of doc.fields) {
-      const quote = field.quote.trim();
-      const hold = (reason: Withheld["reason"], detail: string) =>
-        withheld.push({ mediaId: doc.mediaId, key: field.key, label: field.label, page: field.page, reason, detail });
-      if (!quote) {
-        hold("no_source", `"${field.label}" came with no passage to check.`);
-        continue;
-      }
-      const pageText = source.pages[field.page];
-      if (!pageText || !quoteIsOnPage(quote, pageText)) {
-        hold("quote_not_found", `"${field.label}": the quoted passage is not on page ${field.page}.`);
-        continue;
-      }
-      const checked = [`passage found on page ${field.page}`];
-      const value = field.value.trim();
-      if (!wordsInOrder(words(value), words(quote))) {
-        hold("value_not_in_quote", `"${field.label}": the value "${value}" is not in the quoted passage "${quote}".`);
-        continue;
-      }
-      checked.push("value found in the passage");
-      let normalized = field.normalized?.trim() || null;
-      if (DATE_KEYS.has(field.key)) {
-        const written = datesIn(quote);
-        if (normalized) {
-          if (!written.includes(normalized)) {
-            hold("normalized_mismatch", `"${field.label}": the machine-form date ${normalized} does not match the passage "${quote}"${written.length ? ` (which reads ${written.join(", ")})` : ""}.`);
-            continue;
-          }
-          checked.push(`date ${normalized} matches the passage`);
-        } else if (written.length === 1) {
-          normalized = written[0];
-          checked.push(`date ${normalized} read from the passage by the code`);
-        } else {
-          checked.push("no machine-form date: the rule will say it cannot be assessed");
-        }
-      } else if (normalized && alnum(normalized) !== alnum(value)) {
-        checked.push(`machine form "${normalized}" dropped: it does not match the value`);
-        normalized = null;
-      }
-      fields.push({
-        key: field.key,
-        label: field.label,
-        value,
-        normalized,
-        page: field.page,
-        quote,
-        uncertain: field.uncertain?.trim() || null,
-        checked,
-      });
-    }
-    documents.push({ mediaId: doc.mediaId, readable: doc.readable, unreadableReason: doc.unreadableReason?.trim() || null, fields });
+    documents.push(checkDocument(doc, source, (key, label, page, reason, detail) => withheld.push({ mediaId: doc.mediaId, key, label, page, reason, detail })));
   }
 
   for (const rec of raw.recordings) {
     const source = sources.recordings.find((r) => r.mediaId === rec.mediaId);
     if (!source) {
-      withheld.push({ mediaId: rec.mediaId, key: "*", label: "Recording", reason: "unknown_media", detail: "The draft names a recording this file does not hold." });
+      withheld.push({ mediaId: rec.mediaId, key: "*", label: "Recording", reason: "unknown_media", detail: `The draft names a recording this file does not hold ("${rec.mediaId}").` });
       continue;
     }
     const claims: RecordingClaim[] = [];
     for (const claim of rec.claims) {
-      const quote = claim.quote.trim();
-      const hold = (reason: Withheld["reason"], detail: string) => withheld.push({ mediaId: rec.mediaId, key: claim.key, label: claim.label, reason, detail });
-      if (!quote) {
-        hold("no_source", `"${claim.label}" came with no words to check.`);
-        continue;
-      }
-      const segment = locateQuote(quote, source.transcript.segments);
-      if (!segment) {
-        hold("segment_not_found", `"${claim.label}": the quoted words are not in the transcript${source.transcript.outOfRange ? ` (${source.transcript.outOfRange} transcription segment${source.transcript.outOfRange === 1 ? "" : "s"} fell outside the recording and ${source.transcript.outOfRange === 1 ? "was" : "were"} dropped)` : ""}.`);
-        continue;
-      }
-      const duration = source.durationSeconds;
-      if (segment.start < 0 || segment.end <= segment.start || (duration > 0 && segment.end > duration)) {
-        hold("segment_out_of_range", `"${claim.label}": the audio window ${segment.start}s to ${segment.end}s does not fit a recording of ${duration}s.`);
-        continue;
-      }
-      const checked = [`quoted words found in the recording at ${segment.start.toFixed(1)}s to ${segment.end.toFixed(1)}s`];
-      const clinical = [claim.statement, claim.label, claim.uncertain ?? ""].join(" ").match(CLINICAL);
-      if (clinical) {
-        hold("clinical_content", `"${claim.label}": the statement goes beyond scheduling and administrative facts ("${clinical[0]}"). Nothing clinical is assessed here.`);
-        continue;
-      }
-      const pieces = clauses(quote);
-      let refused: string | null = null;
-      let days: Day[] = [];
-      let earliestHour: number | null = null;
-      let location: RecordingClaim["location"] = null;
-
-      if (claim.key === "days_that_work" || claim.key === "days_that_do_not_work") {
-        const wantNegation = claim.key === "days_that_do_not_work";
-        for (const day of claim.days) {
-          const mentioning = pieces.filter((piece) => mentionsDay(piece, day));
-          if (mentioning.length === 0) {
-            refused = `structured_not_in_quote:${day} is not named in the quoted words`;
-            break;
-          }
-          const negatedMention = mentioning.some(negated);
-          if (wantNegation && !negatedMention) {
-            refused = `negation_mismatch:the quoted words do not say that ${day} does not work`;
-            break;
-          }
-          if (!wantNegation && negatedMention) {
-            refused = `negation_mismatch:the quoted words negate ${day}`;
-            break;
-          }
-          checked.push(`${day} named in the quoted words, ${negatedMention ? "with a negation" : "with no negation"}`);
-        }
-        days = [...claim.days];
-        if (claim.days.length === 0) checked.push("no day named in the structured part");
-        if (claim.earliestHour !== null && hourNamed(quote, claim.earliestHour)) {
-          earliestHour = claim.earliestHour;
-          checked.push(`hour ${claim.earliestHour}:00 named in the quoted words`);
-        } else if (claim.earliestHour !== null) checked.push(`hour ${claim.earliestHour}:00 dropped: not in the quoted words`);
-        if (claim.location && placeNamed(quote, claim.location)) location = claim.location;
-      } else if (claim.key === "time_window") {
-        if (claim.earliestHour !== null) {
-          if (!hourNamed(quote, claim.earliestHour)) refused = `structured_not_in_quote:the hour ${claim.earliestHour}:00 is not named in the quoted words`;
-          else {
-            earliestHour = claim.earliestHour;
-            checked.push(`hour ${claim.earliestHour}:00 named in the quoted words`);
-          }
-        } else checked.push("no hour in the structured part: the rule will say it cannot compare");
-        days = claim.days.filter((day) => pieces.some((piece) => mentionsDay(piece, day)));
-        if (days.length < claim.days.length) checked.push("days not named in the quoted words dropped");
-      } else if (claim.key === "location_preference") {
-        if (claim.location !== null) {
-          if (!placeNamed(quote, claim.location)) refused = `structured_not_in_quote:the place "${claim.location}" is not named in the quoted words`;
-          else {
-            location = claim.location;
-            checked.push(`place "${claim.location}" named in the quoted words`);
-          }
-        } else checked.push("no place in the structured part: the rule will say it cannot compare");
-      } else {
-        const support = statementSupport(claim.statement, quote);
-        if (support < 0.5) refused = `statement_unsupported:the quoted words support ${Math.round(support * 100)}% of the statement`;
-        else checked.push(`${Math.round(support * 100)}% of the statement's words are in the quoted words`);
-      }
-
-      if (refused) {
-        const colon = refused.indexOf(":");
-        const reason = refused.slice(0, colon) as Withheld["reason"];
-        const detail = refused.slice(colon + 1);
-        hold(reason, `"${claim.label}": ${detail}.`);
-        continue;
-      }
-
-      const verbatim = isVerbatim(claim.statement, quote);
-      const nature = claim.nature === "extraction" && !verbatim ? "rephrase" : claim.nature;
-      if (nature === "extraction") checked.push("the statement is the quoted words");
-      else checked.push("the wording is the model's, not the quoted words: judge it against the recording");
-
-      claims.push({
-        key: claim.key,
-        label: claim.label,
-        statement: claim.statement.trim(),
-        nature,
-        segment,
-        quote,
-        days,
-        earliestHour,
-        location,
-        uncertain: claim.uncertain?.trim() || null,
-        checked,
-      });
+      const kept = checkClaim(claim, source, (reason, detail) => withheld.push({ mediaId: rec.mediaId, key: claim.key, label: claim.label, reason, detail }));
+      if (kept) claims.push(kept);
     }
     recordings.push({ mediaId: rec.mediaId, transcript: source.transcript, claims });
   }
@@ -467,5 +619,13 @@ export function verifyDraft(
     }
   }
 
-  return { origin: meta.origin, computedAt: meta.computedAt, documents, recordings, withheld };
+  return {
+    origin: meta.origin,
+    computedAt: meta.computedAt,
+    media: [...sources.documents.map((d) => d.mediaId), ...sources.recordings.map((r) => r.mediaId)],
+    ...(meta.transcriptReused ? { transcriptReused: true } : {}),
+    documents,
+    recordings,
+    withheld,
+  };
 }

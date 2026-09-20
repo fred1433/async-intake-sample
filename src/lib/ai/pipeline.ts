@@ -198,12 +198,14 @@ export async function computeDraft(
   const usage: PipelineUsage = { transcription: null, extraction: null };
   const transcripts: Transcript[] = [];
   const day = new Date().toISOString().slice(0, 10);
+  let transcriptReused = false;
   for (const recording of recordings) {
     const key = `${recording.id}:${process.env.GEMINI_MODEL ?? ""}`;
     const kept = transcriptCache.get(key);
     if (kept && kept.day === day) {
       transcripts.push(kept.transcript);
       usage.transcription = kept.usage ? { ...kept.usage, cached: true } : null;
+      transcriptReused = true;
       continue;
     }
     const result = await doTranscribe(recording);
@@ -219,6 +221,7 @@ export async function computeDraft(
     documents: documents.map(documentSource),
     recordings: transcripts.map((t): RecordingSource => ({ mediaId: t.mediaId, transcript: t, durationSeconds: recordings.find((r) => r.id === t.mediaId)?.durationSeconds ?? 0 })),
   };
-  const draft = verifyDraft(raw, sources, { origin, computedAt: new Date().toISOString() });
+  // The draft says what really ran for it: a reused transcription is not a transcription call.
+  const draft = verifyDraft(raw, sources, { origin, computedAt: new Date().toISOString(), transcriptReused });
   return { draft, usage };
 }

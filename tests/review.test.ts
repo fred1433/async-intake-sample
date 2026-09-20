@@ -9,6 +9,7 @@ import {
   correct,
   documentCount,
   focalProposition,
+  openConflicts,
   receiveDocument,
   replaceDraft,
 } from "../src/lib/engine/review";
@@ -93,13 +94,18 @@ describe("rule 2: disagreeing sources and uncertain extractions wait for a revie
     expect(state.journal.find((e) => e.action === "stage_changed")?.detail).toMatch(/Rule 2/);
   });
 
-  it("finds the sources consistent when the form lists Tuesday only", () => {
+  it("finds the sources consistent on days when the form lists Tuesday only; the hour, said without AM or PM, stays to confirm", () => {
     const s = submission();
     s.answers.preferred_days = ["tuesday"];
     const state = buildReview(s, draft(), NOW);
     const days = state.propositions.find((p) => p.id === "xcheck:days")!;
     expect(days.finding).toBe("consistent");
-    expect(state.stage).toBe("in_review");
+    // "any time after three": the hour is named without AM or PM, so the time window and its cross-check wait for the reviewer.
+    expect(openConflicts(state).map((p) => p.id)).toEqual([expect.stringContaining(":time_window:"), "xcheck:time"]);
+    expect(state.stage).toBe("waiting_for_review");
+    let done = state;
+    for (const p of openConflicts(state)) done = correct(done, p.id, `${p.statement} Checked by phone: from 3 pm.`, T1);
+    expect(done.stage).toBe("in_review");
   });
 
   it("keeps a negative answer, a missing recording and an unusable recording apart", () => {
@@ -309,8 +315,10 @@ describe("an open disagreement cannot simply be approved", () => {
   it("refuses approval and keeps the file waiting", () => {
     const state = buildReview(submission(), draft(), NOW);
     expect(() => approve(state, "xcheck:days", T1)).toThrow(/nothing was chosen/);
-    const corrected = correct(state, "xcheck:days", "Tuesdays after 3 pm, confirmed by phone with the family.", T1);
+    let corrected = correct(state, "xcheck:days", "Tuesdays after 3 pm, confirmed by phone with the family.", T1);
     expect(corrected.propositions.find((p) => p.id === "xcheck:days")?.state).toBe("corrected");
+    expect(openConflicts(corrected).every((p) => p.id.includes("time"))).toBe(true);
+    for (const p of openConflicts(corrected)) corrected = correct(corrected, p.id, `${p.statement} Checked by phone: from 3 pm.`, T2);
     expect(corrected.stage).toBe("in_review");
   });
 
@@ -318,9 +326,12 @@ describe("an open disagreement cannot simply be approved", () => {
     const raw = structuredClone(RAW_DRAFT);
     raw.recordings[0].claims[3].uncertain = "stated as a preference, not a requirement";
     let state = buildReview(submission(), draft(raw), NOW);
-    const location = state.propositions.find((p) => p.finding === "to_confirm")!;
-    expect(location.id).toMatch(/location_preference/);
+    const location = state.propositions.find((p) => p.id.includes(":location_preference:"))!;
+    expect(location.finding).toBe("to_confirm");
+    // The model's doubt reaches the cross-check: no agreement on the place is computed from an uncertain reading.
+    expect(state.propositions.find((p) => p.id === "xcheck:location")?.finding).toBe("to_confirm");
     state = correct(state, "xcheck:days", "Tuesdays after 3 pm, confirmed by phone.", T1);
+    for (const p of openConflicts(state).filter((p) => p.id !== location.id)) state = correct(state, p.id, `${p.statement} Checked by phone.`, T1);
     expect(state.stage).toBe("waiting_for_review");
     state = approve(state, location.id, T2);
     expect(state.stage).toBe("in_review");

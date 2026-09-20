@@ -31,8 +31,10 @@ function usable(stored: ReviewState | null): stored is ReviewState {
     stored &&
       stored.submission &&
       stored.draft &&
+      typeof stored.builtAt === "string" &&
       Array.isArray(stored.propositions) &&
       stored.propositions.every((p) => typeof p.sourceKey === "string") &&
+      (!stored.request || typeof stored.request.contextKey === "string") &&
       Array.isArray(stored.journal),
   );
 }

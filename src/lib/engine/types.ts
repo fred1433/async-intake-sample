@@ -91,13 +91,18 @@ export interface RecordingClaim {
   segment: { start: number; end: number };
   /** Verbatim words of the transcript. */
   quote: string;
-  /** Days named in the quoted words, with the negation checked. */
+  /** Days named in the spoken clause of the quoted words, with the negation checked. */
   days: Day[];
-  /** An hour named in the quoted words, or null. */
+  /** The earliest hour the code established from the spoken words (value, AM or PM, and "from" all present), or null. */
   earliestHour: number | null;
-  /** A place named in the quoted words, or null. */
+  /** A place named in the spoken clause without a negation, or null. */
   location: "home" | "center" | "either" | null;
+  /** What the model structured, kept as proposed: a change here is a change of the proposition. */
+  proposed: { days: Day[]; earliestHour: number | null; location: "home" | "center" | "either" | null };
+  /** What the model itself said it was unsure of. */
   uncertain: string | null;
+  /** What the code could not establish from the spoken words: shown as to confirm, never compared. */
+  unresolved: string | null;
   /** What the code verified about this claim, in words, and what it leaves to the reviewer. */
   checked: string[];
 }
@@ -122,7 +127,7 @@ export interface Withheld {
     | "segment_out_of_range"
     | "structured_not_in_quote"
     | "negation_mismatch"
-    | "statement_unsupported"
+    | "free_statement"
     | "clinical_content"
     | "unknown_media";
   detail: string;
@@ -131,6 +136,10 @@ export interface Withheld {
 export interface Draft {
   origin: "recorded" | "live";
   computedAt: string;
+  /** The media the run was given. A received document absent from documents[] was given and came back with nothing. */
+  media?: string[];
+  /** Set when the transcription was reused from an earlier run of the day instead of being called again. */
+  transcriptReused?: boolean;
   documents: DocumentExtraction[];
   recordings: RecordingReview[];
   /** What the models proposed and the code refused. Kept, shown as not evaluable, never applied. */
@@ -223,6 +232,8 @@ export interface RequestApproval {
   text: string;
   at: string;
   version: number;
+  /** Digest of the context the text was approved for: recipient, child, language, items and their kinds, facts asked about. */
+  contextKey?: string;
   /** Set when the text changed after this approval. */
   superseded?: { at: string; because: string };
 }
@@ -236,6 +247,9 @@ export interface RequestDraft {
   approvedAt?: string;
   /** Message content at the last approval, so a later change is visible. */
   approvedText?: string;
+  /** Digest of the context of the current text (see RequestApproval.contextKey); an approval holds only for the same context. */
+  contextKey: string;
+  approvedContextKey?: string;
   /** Every approval this request received, with its text; a text that changed is marked superseded. */
   approvals: RequestApproval[];
   /** Set when the current text was corrected by the reviewer instead of composed by the rule. */
@@ -299,6 +313,8 @@ export interface JournalEntry {
 export interface ReviewState {
   submission: Submission;
   draft: Draft;
+  /** When this file was built (opened or reset). A live run started on another build is not applied to this one. */
+  builtAt: string;
   propositions: Proposition[];
   request?: RequestDraft;
   /** File version: content changes increment it. */

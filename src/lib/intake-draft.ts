@@ -40,6 +40,14 @@ export function sampleIntakeDraft(): IntakeDraft {
 }
 
 /**
+ * The parent changes the language of the screen. The language of the messages
+ * (contact_language) is a separate answer on the form: it is not rewritten.
+ */
+export function switchDraftLanguage(draft: IntakeDraft, lang: Lang): IntakeDraft {
+  return { ...draft, lang };
+}
+
+/**
  * The submission a saved form becomes. A form saved again keeps its first
  * submission date and moves the version; the sample form continues from the
  * sample submission.

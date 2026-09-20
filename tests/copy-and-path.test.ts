@@ -6,6 +6,7 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { RawTranscript } from "../src/lib/engine/raw";
 import { addToRequest, buildReview, requestText } from "../src/lib/engine/review";
 import { DICTIONARIES } from "../src/lib/i18n";
 import { sampleIntakeDraft, submissionFromDraft } from "../src/lib/intake-draft";
@@ -13,7 +14,7 @@ import { loadReview, resetToSample } from "../src/lib/review-store";
 import { SAMPLE_REFERENCE, SAMPLE_SUBMISSION } from "../src/lib/sample";
 import { INTAKE_PREFIX, loadJSON } from "../src/lib/storage";
 import { promptQuestions, TEMPLATE } from "../src/lib/template";
-import { NOW, RAW_DRAFT, draft, submission } from "./helpers";
+import { HAND_TRANSCRIPT, NOW, RAW_DRAFT, draft, submission } from "./helpers";
 
 const ROOT = path.resolve(import.meta.dirname, "..");
 
@@ -119,21 +120,39 @@ describe("D. Spanish the engine composes", () => {
   };
 
   it("20. a time or place to confirm is asked in Spanish, from structured data, never from the English statement", () => {
-    // The recording says after three, at home (both in the quoted words); the form says morning, at the center.
+    // The recording says after three pm, at home (both in the spoken words); the form says morning, at the center.
+    const spokenWithPm: RawTranscript = {
+      ...HAND_TRANSCRIPT,
+      segments: HAND_TRANSCRIPT.segments.map((seg) => ({ ...seg, text: seg.text.replace("any time after three.", "any time after three pm.") })),
+    };
     const s = spanish();
     s.answers.preferred_time = "morning";
     s.answers.location = "center";
     s.answers.preferred_days = ["tuesday"];
-    let state = buildReview(s, draft(), NOW);
+    let state = buildReview(s, draft(RAW_DRAFT, spokenWithPm), NOW);
     expect(state.propositions.find((p) => p.id === "xcheck:time")?.finding).toBe("conflicting");
     expect(state.propositions.find((p) => p.id === "xcheck:location")?.finding).toBe("conflicting");
     state = addToRequest(state, "xcheck:time", NOW);
     state = addToRequest(state, "xcheck:location", NOW);
     const text = state.request!.text;
     expect(text).not.toMatch(/The form|recorded answer|To confirm/);
-    expect(text).toMatch(/su formulario indica mañana, y en su respuesta grabada dice a partir de las 15:00/);
+    expect(text).toMatch(/su formulario indica por la mañana, y en su respuesta grabada dice a partir de las 15:00/);
     expect(text).toMatch(/su formulario indica en el centro, y en su respuesta grabada dice en casa/);
     expect(text).toMatch(/También quisiéramos confirmar algunas cosas:/);
+  });
+
+  it("20c. an hour said without AM or PM is asked as a question, not attributed as 15:00, in both languages", () => {
+    const s = spanish();
+    s.answers.preferred_time = "morning";
+    s.answers.preferred_days = ["tuesday"];
+    let state = buildReview(s, draft(), NOW);
+    expect(state.propositions.find((p) => p.id === "xcheck:time")?.finding).toBe("to_confirm");
+    state = addToRequest(state, "xcheck:time", NOW);
+    expect(state.request!.text).toMatch(/su formulario indica por la mañana; ¿podría confirmar el momento del día que le conviene\?/);
+    expect(state.request!.text).not.toMatch(/15:00|a partir de/);
+    const en = addToRequest(buildReview({ ...submission(), answers: { ...submission().answers, preferred_time: "morning", preferred_days: ["tuesday"] } }, draft(), NOW), "xcheck:time", NOW);
+    expect(en.request!.text).toMatch(/your form says in the morning; could you confirm the time of day that works for you\?/);
+    expect(en.request!.text).not.toMatch(/3:00 pm|from 3/);
   });
 
   it("20b. a form day the recording does not mention is asked in Spanish too", () => {

@@ -11,12 +11,15 @@
  * Pure functions over plain data, so the same code runs in tests, in the
  * browser and on the server. Every function returns a new state.
  *
- * Two things hold the approvals honest. Every proposition carries a source key,
- * a digest of what the source gave it (statement, nature, finding, evidence,
- * criterion, details): when a new draft or a new submission produces a
- * proposition with another key, the reviewer's work on the old one goes to the
- * history and the new one is proposed again. And the file approval names a
- * SHA-256 of the whole content, request included, so a change anywhere ends it.
+ * Three things hold the approvals honest. Every proposition carries a source
+ * key, a digest of what the source gave it (statement, nature, finding,
+ * evidence, criterion, structured data, what the code checked): when a new
+ * draft or a new submission produces a proposition with another key, the
+ * reviewer's work on the old one goes to the history and the new one is
+ * proposed again. The request carries a context key (recipient, child,
+ * language, items and their kinds, the facts asked about): an approval of its
+ * text holds only for that context. And the file approval names a SHA-256 of
+ * the whole content, request included, so a change anywhere ends it.
  */
 import { documentItems, promptQuestions, TEMPLATE } from "../template";
 import { dict, optionLabel } from "../i18n";
@@ -233,6 +236,7 @@ function sourceKeyOf(p: Omit<Proposition, "sourceKey">): string {
       criterion: p.criterion,
       details: p.details,
       requestable: p.requestable,
+      checked: p.checked,
     }),
   );
 }
@@ -248,6 +252,7 @@ export function contentFingerprint(state: Pick<ReviewState, "submission" | "draf
       submission: {
         reference: state.submission.reference,
         version: state.submission.version,
+        submittedAt: state.submission.submittedAt,
         language: state.submission.language,
         answers: state.submission.answers,
         documents: state.submission.documents,
@@ -322,19 +327,35 @@ function documentPropositions(submission: Submission, draft: Draft, now: string,
     const withheld = draft.withheld.filter((w) => w.mediaId === slot.mediaId && w.key !== "*").length;
     const pages = extraction ? new Set(extraction.fields.map((f) => f.page)).size : 0;
     const read = extraction ? extraction.fields.length : 0;
+    // Given to the run and absent from its output: read, with nothing usable back. Not given to any run yet: not read.
+    const given = !extraction && (draft.media?.includes(slot.mediaId) ?? false);
     const statement = extraction
       ? `Received and readable. ${read} field${read === 1 ? "" : "s"} read${pages > 1 ? ` across ${pages} pages` : ""}${withheld > 0 ? `, ${withheld} withheld by the source check` : ""}.`
-      : "Received. Not read yet.";
+      : given
+        ? "Received. The draft returned nothing for it: 0 fields read."
+        : "Received. Not read yet: no draft has read this document.";
+    const unread = !extraction || read === 0;
     out.push(
       keyed({
         ...base,
         statement,
         evidence: [{ kind: "document", mediaId: slot.mediaId, page: 1, quote: "" }],
-        finding: extraction && read === 0 ? "to_confirm" : "present",
-        criterion:
-          extraction && read === 0
-            ? { id: "document_read", label: "Something could be read from the document", rule: "At least one field passed the source check.", result: "not_met", note: withheld > 0 ? `${withheld} proposed field${withheld === 1 ? "" : "s"} failed the check and ${withheld === 1 ? "is" : "are"} listed below as not evaluable.` : "The model proposed nothing for this document." }
-            : undefined,
+        finding: unread ? "to_confirm" : "present",
+        criterion: unread
+          ? {
+              id: "document_read",
+              label: "Something could be read from the document",
+              rule: "At least one field passed the source check. A document that was received but not read is not a document read.",
+              result: extraction || given ? "not_met" : "not_assessable",
+              note: extraction
+                ? withheld > 0
+                  ? `${withheld} proposed field${withheld === 1 ? "" : "s"} failed the check and ${withheld === 1 ? "is" : "are"} listed below as not evaluable.`
+                  : "The model proposed nothing for this document."
+                : given
+                  ? "The document was given to the run and nothing came back for it."
+                  : "No draft has read this document yet. Run the draft again, or check it by hand.",
+            }
+          : undefined,
         history: [{ statement, by: extraction ? "ai" : "rule", at: now, version }],
       }),
     );
@@ -538,7 +559,7 @@ const WITHHELD_REASONS: Record<string, string> = {
   segment_out_of_range: "The audio window does not fit the recording.",
   structured_not_in_quote: "A day, hour or place is not in the quoted words.",
   negation_mismatch: "The quoted words say the opposite, or do not say it.",
-  statement_unsupported: "The quoted words do not support the statement.",
+  free_statement: "A free statement is not assessed by the code: the reviewer reads the quoted words.",
   clinical_content: "The statement is clinical. Nothing clinical is assessed here.",
   unknown_media: "The draft names a file this submission does not hold.",
 };
@@ -548,7 +569,33 @@ function withheldPropositions(submission: Submission, draft: Draft, now: string,
   const out: Proposition[] = [];
   const seen = new Map<string, number>();
   for (const w of draft.withheld) {
-    if (w.key === "*") continue;
+    if (w.key === "*") {
+      // The draft named a file this submission does not hold: nothing to attach it to, still listed.
+      const statement = `Not evaluable. ${w.detail}`;
+      out.push(
+        keyed({
+          id: `withheld:${w.mediaId}:*`,
+          group: w.label === "Recording" ? "recording" : "documents",
+          label: `${w.label} named by the draft: "${w.mediaId}"`,
+          statement,
+          nature: "rule",
+          evidence: [],
+          finding: "withheld",
+          criterion: {
+            id: "source_check",
+            label: "Source check",
+            rule: "Every value must be in a passage of the page it names; every claim must be in the quoted words of the recording, negation included.",
+            result: "not_assessable",
+            note: WITHHELD_REASONS[w.reason] ?? w.reason,
+          },
+          state: "proposed",
+          history: [{ statement, by: "rule", at: now, version }],
+          dependsOn: [],
+          inRequest: false,
+        }),
+      );
+      continue;
+    }
     const docItem = documentItems(TEMPLATE).find((item) => submission.documents[item.id]?.status === "received" && submission.documents[item.id]?.mediaId === w.mediaId);
     const prompt = promptQuestions(TEMPLATE).find((p) => submission.recordings[p.id]?.status === "received" && submission.recordings[p.id]?.mediaId === w.mediaId);
     if (!docItem && !prompt) continue;
@@ -610,7 +657,26 @@ function recordingPropositions(submission: Submission, draft: Draft, now: string
       continue;
     }
     const review = draft.recordings.find((r) => r.mediaId === slot.mediaId);
-    if (!review) continue;
+    if (!review) {
+      const statement = "Received. Not read yet: no draft has transcribed this recording.";
+      out.push(
+        keyed({
+          id: `rec:${prompt.id}:unread`,
+          group: "recording",
+          label,
+          statement,
+          nature: "rule",
+          evidence: [{ kind: "audio", mediaId: slot.mediaId, start: 0, end: slot.durationSeconds ?? 0, quote: "" }],
+          finding: "to_confirm",
+          criterion: { id: "recording_read", label: "Something could be read from the recording", rule: "At least one claim passed the source check. A recording received but not transcribed is not a recording read.", result: "not_assessable", note: "No draft has read this recording yet." },
+          state: "proposed",
+          history: [{ statement, by: "rule", at: now, version }],
+          dependsOn: [],
+          inRequest: false,
+        }),
+      );
+      continue;
+    }
     if (review.transcript.unusable) {
       const statement = `The recording could not be used: ${review.transcript.unusable}`;
       out.push(
@@ -653,15 +719,19 @@ function recordingPropositions(submission: Submission, draft: Draft, now: string
       );
     }
     review.claims.forEach((claim, index) => {
-      const finding: Finding = claim.uncertain ? "to_confirm" : claim.key === "days_that_do_not_work" ? "negative" : "present";
+      // A draft stored before the structured data was kept as proposed: what was established stands in for it.
+      const proposed = claim.proposed ?? { days: claim.days, earliestHour: claim.earliestHour, location: claim.location };
+      const open = claim.uncertain || claim.unresolved;
+      const finding: Finding = open ? "to_confirm" : claim.key === "days_that_do_not_work" ? "negative" : "present";
+      const notes = [claim.uncertain ? `Uncertain, in the model's words: ${claim.uncertain}` : "", claim.unresolved ? `Not established by the code: ${claim.unresolved}` : ""].filter(Boolean);
       const criterion: Criterion | undefined =
         claim.key === "days_that_work" || claim.key === "time_window"
           ? {
               id: "availability_stated",
               label: "Availability stated",
-              rule: "At least one day or time window is stated by the parent.",
-              result: claim.days.length > 0 || claim.earliestHour !== null ? "met" : "not_assessable",
-              note: claim.uncertain ? `Uncertain: ${claim.uncertain}` : undefined,
+              rule: "At least one day or time window is stated by the parent, and established from the spoken words.",
+              result: open ? "not_assessable" : claim.days.length > 0 || claim.earliestHour !== null ? "met" : "not_assessable",
+              note: notes.length > 0 ? notes.join(" ") : undefined,
             }
           : undefined;
       out.push(
@@ -679,6 +749,16 @@ function recordingPropositions(submission: Submission, draft: Draft, now: string
           dependsOn: [],
           inRequest: false,
           checked: claim.checked,
+          // The structured data, as proposed and as established: part of the source key, so a change here is a new proposition.
+          details: {
+            proposedDays: [...proposed.days],
+            proposedHour: proposed.earliestHour !== null ? [String(proposed.earliestHour)] : [],
+            proposedPlace: proposed.location ? [proposed.location] : [],
+            days: [...claim.days],
+            hour: claim.earliestHour !== null ? [String(claim.earliestHour)] : [],
+            place: claim.location ? [claim.location] : [],
+            unresolved: claim.unresolved ? [claim.unresolved] : [],
+          },
         }),
       );
     });
@@ -688,6 +768,8 @@ function recordingPropositions(submission: Submission, draft: Draft, now: string
 
 const place = (value: string | null) => (value === "home" ? "sessions at home" : value === "center" ? "sessions at the center" : "either place");
 
+const UNCERTAIN_RULE = "A statement the model marks uncertain, or an hour or place the code could not establish from the spoken words, is to confirm: never an agreement.";
+
 function crossCheckPropositions(submission: Submission, draft: Draft, recordingProps: Proposition[], now: string, version: number): Proposition[] {
   const out: Proposition[] = [];
   const prompt = promptQuestions(TEMPLATE)[0];
@@ -695,22 +777,36 @@ function crossCheckPropositions(submission: Submission, draft: Draft, recordingP
   const review = slot?.mediaId ? draft.recordings.find((r) => r.mediaId === slot.mediaId) : undefined;
   if (!review || review.transcript.unusable) return out;
 
-  const claimProp = (key: string) => recordingProps.find((p) => p.id.startsWith(`claim:${review.mediaId}:${key}:`));
   const claimsOf = (key: string) => review.claims.filter((c) => c.key === key);
+  /** The proposition ids of every claim of these keys: all of them are dependencies, not the first one only. */
+  const propIdsOf = (...keys: string[]) => recordingProps.filter((p) => keys.some((key) => p.id.startsWith(`claim:${review.mediaId}:${key}:`))).map((p) => p.id);
+  const audioOf = (claims: typeof review.claims): Evidence[] => {
+    const seen = new Set<string>();
+    const evidence: Evidence[] = [];
+    for (const c of claims) {
+      const key = `${c.segment.start}-${c.segment.end}-${c.quote}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      evidence.push({ kind: "audio", mediaId: review.mediaId, start: c.segment.start, end: c.segment.end, quote: c.quote });
+    }
+    return evidence;
+  };
+  const uncertainNote = (claims: typeof review.claims): string | null => {
+    const notes = claims.filter((c) => c.uncertain).map((c) => `"${c.label}" is marked uncertain by the model: ${c.uncertain}`);
+    return notes.length > 0 ? notes.join(" ") : null;
+  };
 
   const formDays = answerList(submission, "preferred_days");
-  const works = [...new Set(claimsOf("days_that_work").flatMap((c) => c.days))];
-  const doesNot = [...new Set(claimsOf("days_that_do_not_work").flatMap((c) => c.days))];
+  const positive = claimsOf("days_that_work");
+  const negative = claimsOf("days_that_do_not_work");
+  const works = [...new Set(positive.flatMap((c) => c.days))];
+  const doesNot = [...new Set(negative.flatMap((c) => c.days))];
   if (works.length > 0 || doesNot.length > 0) {
     const contradicted = formDays.filter((d) => doesNot.includes(d as Day));
     const unmentioned = formDays.filter((d) => !works.includes(d as Day) && !doesNot.includes(d as Day));
     const extra = works.filter((d) => !formDays.includes(d));
-    const negative = claimsOf("days_that_do_not_work")[0];
-    const positive = claimsOf("days_that_work")[0];
-    const evidence: Evidence[] = [{ kind: "form", questionId: "preferred_days", value: dayList(formDays) || "none" }];
-    if (negative) evidence.push({ kind: "audio", mediaId: review.mediaId, start: negative.segment.start, end: negative.segment.end, quote: negative.quote });
-    if (positive) evidence.push({ kind: "audio", mediaId: review.mediaId, start: positive.segment.start, end: positive.segment.end, quote: positive.quote });
-    const dependsOn = [claimProp("days_that_work")?.id, claimProp("days_that_do_not_work")?.id].filter((x): x is string => !!x);
+    const evidence: Evidence[] = [{ kind: "form", questionId: "preferred_days", value: dayList(formDays) || "none" }, ...audioOf([...negative, ...positive])];
+    const uncertain = uncertainNote([...positive, ...negative]);
     const base = {
       id: "xcheck:days",
       group: "cross_checks" as const,
@@ -718,11 +814,11 @@ function crossCheckPropositions(submission: Submission, draft: Draft, recordingP
       nature: "rule" as const,
       evidence,
       state: "proposed" as const,
-      dependsOn,
+      dependsOn: propIdsOf("days_that_work", "days_that_do_not_work"),
       details: { formDays, works, doesNot, contradicted, unmentioned },
     };
     const criterionLabel = "Form and recorded answer agree on days";
-    const rule = "Every day listed on the form is stated as working in the recording, and none is stated as not working. A day the recording does not mention is not an agreement.";
+    const rule = `Every day listed on the form is stated as working in the recording, and none is stated as not working. A day the recording does not mention is not an agreement. ${UNCERTAIN_RULE}`;
     if (contradicted.length > 0) {
       const statement = `To confirm with the family. The form lists ${dayList(formDays)}; the recorded answer says ${dayList(contradicted)} ${contradicted.length > 1 ? "do" : "does"} not work. No day has been chosen.`;
       out.push(
@@ -730,7 +826,7 @@ function crossCheckPropositions(submission: Submission, draft: Draft, recordingP
           ...base,
           statement,
           finding: "conflicting",
-          criterion: { id: "sources_agree_days", label: criterionLabel, rule, result: "not_met", note: `${dayList(contradicted)} appears in both.` },
+          criterion: { id: "sources_agree_days", label: criterionLabel, rule, result: "not_met", note: [`${dayList(contradicted)} appears in both.`, uncertain].filter(Boolean).join(" ") },
           history: [{ statement, by: "rule", at: now, version }],
           requestable: "confirm",
           inRequest: false,
@@ -743,7 +839,7 @@ function crossCheckPropositions(submission: Submission, draft: Draft, recordingP
           ...base,
           statement,
           finding: "to_confirm",
-          criterion: { id: "sources_agree_days", label: criterionLabel, rule, result: "not_assessable", note: "The form names no day to compare with." },
+          criterion: { id: "sources_agree_days", label: criterionLabel, rule, result: "not_assessable", note: ["The form names no day to compare with.", uncertain].filter(Boolean).join(" ") },
           history: [{ statement, by: "rule", at: now, version }],
           requestable: "confirm",
           inRequest: false,
@@ -756,7 +852,20 @@ function crossCheckPropositions(submission: Submission, draft: Draft, recordingP
           ...base,
           statement,
           finding: "to_confirm",
-          criterion: { id: "sources_agree_days", label: criterionLabel, rule, result: "not_assessable", note: `${dayList(unmentioned)} ${unmentioned.length > 1 ? "are" : "is"} not mentioned in the recording.` },
+          criterion: { id: "sources_agree_days", label: criterionLabel, rule, result: "not_assessable", note: [`${dayList(unmentioned)} ${unmentioned.length > 1 ? "are" : "is"} not mentioned in the recording.`, uncertain].filter(Boolean).join(" ") },
+          history: [{ statement, by: "rule", at: now, version }],
+          requestable: "confirm",
+          inRequest: false,
+        }),
+      );
+    } else if (uncertain) {
+      const statement = `To confirm with the family. The form lists ${dayList(formDays)} and the recorded answer names the same days, but the model marked its reading of the recording as uncertain. No day has been chosen.`;
+      out.push(
+        keyed({
+          ...base,
+          statement,
+          finding: "to_confirm",
+          criterion: { id: "sources_agree_days", label: criterionLabel, rule, result: "not_assessable", note: uncertain },
           history: [{ statement, by: "rule", at: now, version }],
           requestable: "confirm",
           inRequest: false,
@@ -777,17 +886,28 @@ function crossCheckPropositions(submission: Submission, draft: Draft, recordingP
     }
   }
 
-  const time = claimsOf("time_window")[0];
+  const times = claimsOf("time_window");
   const formTime = answerText(submission, "preferred_time");
-  if (time && formTime) {
+  if (times.length > 0 && formTime) {
     const formHour = FORM_TIME_HOUR[formTime] ?? null;
-    const agree = time.earliestHour !== null && formHour !== null && time.earliestHour === formHour;
-    const unknown = time.earliestHour === null || formHour === null;
-    const statement = unknown
-      ? `To confirm with the family. The form says ${optionLabel("en", formTime).toLowerCase()}; the recorded answer gives no comparable hour.`
-      : agree
-        ? `The form and the recorded answer agree: ${optionLabel("en", formTime).toLowerCase()}.`
-        : `To confirm with the family. The form says ${optionLabel("en", formTime).toLowerCase()}; the recorded answer says from ${time.earliestHour}:00.`;
+    const formLabel = optionLabel("en", formTime).toLowerCase();
+    const hours = [...new Set(times.map((c) => c.earliestHour).filter((h): h is number => h !== null))];
+    const uncertain = uncertainNote(times);
+    const unresolved = times.map((c) => c.unresolved).filter((x): x is string => !!x);
+    const hour = hours.length === 1 && !uncertain && unresolved.length === 0 ? hours[0] : null;
+    const reason =
+      uncertain ??
+      (unresolved.length > 0 ? `In the recorded answer, ${unresolved.join(" ")}` : null) ??
+      (hours.length > 1 ? `The recorded answer names more than one hour (${hours.map(clockLabel).join(", ")}).` : null) ??
+      (hours.length === 0 ? "The recorded answer gives no comparable hour." : null) ??
+      (formHour === null ? "The form option has no hour to compare with." : null);
+    const agree = hour !== null && formHour !== null && hour === formHour;
+    const statement =
+      reason !== null
+        ? `To confirm with the family. The form says ${formLabel}; ${reason.charAt(0).toLowerCase()}${reason.slice(1)}`
+        : agree
+          ? `The form and the recorded answer agree: ${formLabel}.`
+          : `To confirm with the family. The form says ${formLabel}; the recorded answer says from ${clockLabel(hour!)}.`;
     out.push(
       keyed({
         id: "xcheck:time",
@@ -795,39 +915,41 @@ function crossCheckPropositions(submission: Submission, draft: Draft, recordingP
         label: "Time of day",
         statement,
         nature: "rule",
-        evidence: [
-          { kind: "form", questionId: "preferred_time", value: optionLabel("en", formTime) },
-          { kind: "audio", mediaId: review.mediaId, start: time.segment.start, end: time.segment.end, quote: time.quote },
-        ],
-        finding: unknown ? "to_confirm" : agree ? "consistent" : "conflicting",
+        evidence: [{ kind: "form", questionId: "preferred_time", value: optionLabel("en", formTime) }, ...audioOf(times)],
+        finding: reason !== null ? "to_confirm" : agree ? "consistent" : "conflicting",
         criterion: {
           id: "sources_agree_time",
           label: "Form and recorded answer agree on the time of day",
-          rule: "The earliest hour stated in the recording equals the hour the form option starts at. No hour in the recording is not an agreement.",
-          result: unknown ? "not_assessable" : agree ? "met" : "not_met",
+          rule: `The earliest hour established from the recording (value, AM or PM, and "from" all in the spoken words) equals the hour the form option starts at. ${UNCERTAIN_RULE}`,
+          result: reason !== null ? "not_assessable" : agree ? "met" : "not_met",
+          note: reason ?? undefined,
         },
         state: "proposed",
         history: [{ statement, by: "rule", at: now, version }],
-        dependsOn: [claimProp("time_window")?.id].filter((x): x is string => !!x),
+        dependsOn: propIdsOf("time_window"),
         requestable: agree ? undefined : "confirm",
         inRequest: false,
-        details: { formTime: [formTime], recordedHour: time.earliestHour !== null ? [String(time.earliestHour)] : [] },
+        details: { formTime: [formTime], recordedHour: hour !== null ? [String(hour)] : [] },
       }),
     );
   }
 
-  const location = claimsOf("location_preference")[0];
+  const locations = claimsOf("location_preference");
   const formLocation = answerText(submission, "location");
-  if (location && formLocation) {
-    const unknown = location.location === null;
-    const compatible = !unknown && (formLocation === "either" || formLocation === location.location);
-    const statement = unknown
-      ? `To confirm with the family. The form says ${place(formLocation)}; the recorded answer names no clear place.`
-      : compatible
-        ? formLocation === "either"
-          ? `The form allows either place; the parent prefers ${place(location.location)}.`
-          : `The form and the recorded answer agree: ${place(formLocation)}.`
-        : `To confirm with the family. The form says ${place(formLocation)}; the recorded answer prefers ${place(location.location)}.`;
+  if (locations.length > 0 && formLocation) {
+    const places = [...new Set(locations.map((c) => c.location).filter((x): x is "home" | "center" | "either" => x !== null))];
+    const uncertain = uncertainNote(locations);
+    const recorded = places.length === 1 && !uncertain ? places[0] : null;
+    const reason = uncertain ?? (places.length > 1 ? `The recorded answer names more than one place (${places.join(", ")}).` : null) ?? (places.length === 0 ? "The recorded answer names no clear place." : null);
+    const compatible = recorded !== null && (formLocation === "either" || formLocation === recorded);
+    const statement =
+      reason !== null
+        ? `To confirm with the family. The form says ${place(formLocation)}; ${reason.charAt(0).toLowerCase()}${reason.slice(1)}`
+        : compatible
+          ? formLocation === "either"
+            ? `The form allows either place; the parent prefers ${place(recorded)}.`
+            : `The form and the recorded answer agree: ${place(formLocation)}.`
+          : `To confirm with the family. The form says ${place(formLocation)}; the recorded answer prefers ${place(recorded)}.`;
     out.push(
       keyed({
         id: "xcheck:location",
@@ -835,28 +957,28 @@ function crossCheckPropositions(submission: Submission, draft: Draft, recordingP
         label: "Where sessions take place",
         statement,
         nature: "rule",
-        evidence: [
-          { kind: "form", questionId: "location", value: optionLabel("en", formLocation) },
-          { kind: "audio", mediaId: review.mediaId, start: location.segment.start, end: location.segment.end, quote: location.quote },
-        ],
-        finding: unknown ? "to_confirm" : compatible ? "consistent" : "conflicting",
+        evidence: [{ kind: "form", questionId: "location", value: optionLabel("en", formLocation) }, ...audioOf(locations)],
+        finding: reason !== null ? "to_confirm" : compatible ? "consistent" : "conflicting",
         criterion: {
           id: "sources_agree_location",
           label: "Form and recorded answer are compatible on the place",
-          rule: "The recorded preference is allowed by the form answer. No place in the recording is not an agreement.",
-          result: unknown ? "not_assessable" : compatible ? "met" : "not_met",
+          rule: `The recorded preference, named without a negation in the spoken words, is allowed by the form answer. No place in the recording is not an agreement. ${UNCERTAIN_RULE}`,
+          result: reason !== null ? "not_assessable" : compatible ? "met" : "not_met",
+          note: reason ?? undefined,
         },
         state: "proposed",
         history: [{ statement, by: "rule", at: now, version }],
-        dependsOn: [claimProp("location_preference")?.id].filter((x): x is string => !!x),
+        dependsOn: propIdsOf("location_preference"),
         requestable: compatible ? undefined : "confirm",
         inRequest: false,
-        details: { formPlace: [formLocation], recordedPlace: location.location ? [location.location] : [] },
+        details: { formPlace: [formLocation], recordedPlace: recorded ? [recorded] : [] },
       }),
     );
   }
   return out;
 }
+
+const clockLabel = (hour: number) => `${hour % 12 === 0 ? 12 : hour % 12}:00 ${hour < 12 ? "am" : "pm"}`;
 
 export function buildPropositions(submission: Submission, draft: Draft, now: string, version = 1): Proposition[] {
   const docs = documentPropositions(submission, draft, now, version);
@@ -865,7 +987,7 @@ export function buildPropositions(submission: Submission, draft: Draft, now: str
   const withheld = withheldPropositions(submission, draft, now, version);
   const cross = crossCheckPropositions(submission, draft, recording, now, version);
   const byGroup = (group: PropositionGroup) => [...fields, ...withheld].filter((p) => p.group === group);
-  return [...docs, ...byGroup("referral_letter"), ...byGroup("insurance_card"), ...recording, ...withheld.filter((p) => p.group === "recording"), ...cross];
+  return [...docs, ...byGroup("documents"), ...byGroup("referral_letter"), ...byGroup("insurance_card"), ...recording, ...withheld.filter((p) => p.group === "recording"), ...cross];
 }
 
 /* ---------- The request to the family (rule 1) ---------- */
@@ -905,7 +1027,7 @@ export function requestText(submission: Submission, propositions: Proposition[],
         else if (formDays) lines.push(`- ${t.confirmDaysUnmentioned(formDays, dayList(details.works ?? [], lang))}`);
         else lines.push(`- ${t.confirmDaysNone(dayList(details.works ?? [], lang))}`);
       } else if (item.propositionId === "xcheck:time") {
-        const formTime = optionLabel(lang, details.formTime?.[0] ?? "").toLowerCase();
+        const formTime = t.timePhrase[details.formTime?.[0] ?? ""] ?? optionLabel(lang, details.formTime?.[0] ?? "").toLowerCase();
         const hour = details.recordedHour?.[0] ? Number(details.recordedHour[0]) : null;
         const clock = hour === null ? "" : lang === "es" ? `${hour}:00` : `${hour % 12 === 0 ? 12 : hour % 12}:00 ${hour < 12 ? "am" : "pm"}`;
         lines.push(`- ${hour !== null ? t.confirmTime(formTime, clock) : t.confirmTimeUnknown(formTime)}`);
@@ -922,17 +1044,31 @@ export function requestText(submission: Submission, propositions: Proposition[],
   return lines.join("\n");
 }
 
-function sameOpenItems(a: RequestItem[], b: RequestItem[]): boolean {
-  const open = (items: RequestItem[]) => items.filter((i) => !i.satisfiedAt).map((i) => `${i.propositionId}:${i.kind}`).sort().join("|");
-  return open(a) === open(b);
+/**
+ * What the request is about: who receives it, which child, in which language,
+ * which items and of which kind, and the facts asked about. The reviewer's
+ * corrected text and the approval of the text hold only for this context.
+ */
+export function requestContextKey(submission: Submission, propositions: Proposition[], items: RequestItem[]): string {
+  const open = items.filter((i) => !i.satisfiedAt).map((i) => ({ id: i.propositionId, kind: i.kind })).sort((a, b) => (a.id < b.id ? -1 : 1));
+  return sha256Hex(
+    canonical({
+      language: requestLanguage(submission),
+      recipient: answerText(submission, "guardian_name"),
+      child: answerText(submission, "child_first_name"),
+      code: submission.reference,
+      items: open,
+      facts: open.map((i) => propositions.find((p) => p.id === i.id)?.details ?? null),
+    }),
+  );
 }
 
 interface ComposedRequest {
   request?: RequestDraft;
-  /** The request was approved and its text changed: it is a draft again. */
-  reopened?: { approvedText: string };
-  /** The reviewer had corrected the text and the items changed: the rule composed it again; this is the reviewer's text. */
-  editedDropped?: string;
+  /** The request was approved and its text or its context changed: it is a draft again. */
+  reopened?: { approvedText: string; because: string };
+  /** The reviewer had corrected the text and the context changed: the rule composed it again; this is the reviewer's text. */
+  editedDropped?: { text: string; because: string };
 }
 
 function composeRequest(submission: Submission, propositions: Proposition[], previous: RequestDraft | undefined, now: string): ComposedRequest {
@@ -940,7 +1076,8 @@ function composeRequest(submission: Submission, propositions: Proposition[], pre
   for (const p of propositions) {
     if (p.inRequest && p.requestable) {
       const kept = previous?.items.find((i) => i.propositionId === p.id);
-      items.push(kept && !kept.satisfiedAt ? kept : { propositionId: p.id, kind: p.requestable });
+      // An item asked for as missing and received unreadable is another request: same id, new kind.
+      items.push(kept && !kept.satisfiedAt && kept.kind === p.requestable ? kept : { propositionId: p.id, kind: p.requestable });
     }
   }
   // Items no longer asked for stay in the record, marked satisfied.
@@ -950,27 +1087,33 @@ function composeRequest(submission: Submission, propositions: Proposition[], pre
   if (items.length === 0) return {};
   // Nothing left to ask: the request is done. Its last text and status stand; nothing is composed again.
   if (previous && items.every((i) => i.satisfiedAt)) return { request: { ...previous, items } };
+  const contextKey = requestContextKey(submission, propositions, items);
+  const sameContext = previous?.contextKey === contextKey;
+  const contextChange = previous && !sameContext ? "the recipient, the child, the language, the items or the facts asked about changed" : "";
   const composed = requestText(submission, propositions, items, submission.reference);
-  const keepEdit = previous?.edited && sameOpenItems(previous.items, items) && previous.language === requestLanguage(submission);
+  const keepEdit = Boolean(previous?.edited && sameContext);
   const text = keepEdit ? previous!.text : composed;
-  const editedDropped = previous?.edited && !keepEdit ? previous.text : undefined;
+  const editedDropped = previous?.edited && !keepEdit ? { text: previous.text, because: contextChange } : undefined;
   const wasApproved = previous?.status === "approved";
-  const reopened = wasApproved && text !== previous?.approvedText;
-  const approvals = (previous?.approvals ?? []).map((a, index, all) =>
-    reopened && index === all.length - 1 && !a.superseded ? { ...a, superseded: { at: now, because: "the text changed" } } : a,
-  );
+  const textChanged = text !== previous?.approvedText;
+  const contextChanged = previous?.approvedContextKey !== contextKey;
+  const reopened = wasApproved && (textChanged || contextChanged);
+  const because = textChanged && contextChanged ? `the text changed and ${contextChange}` : textChanged ? "the text changed" : contextChange;
+  const approvals = (previous?.approvals ?? []).map((a, index, all) => (reopened && index === all.length - 1 && !a.superseded ? { ...a, superseded: { at: now, because } } : a));
   return {
     request: {
       language: requestLanguage(submission),
       items,
       text,
+      contextKey,
       status: reopened ? "draft" : (previous?.status ?? "draft"),
       approvedAt: reopened ? undefined : previous?.approvedAt,
       approvedText: previous?.approvedText,
+      approvedContextKey: previous?.approvedContextKey,
       approvals,
       edited: keepEdit ? previous!.edited : undefined,
     },
-    reopened: reopened ? { approvedText: previous!.approvedText ?? "" } : undefined,
+    reopened: reopened ? { approvedText: previous!.approvedText ?? "", because } : undefined,
     editedDropped,
   };
 }
@@ -1023,9 +1166,9 @@ function refreshRequest(state: ReviewState, now: string, because: string): Revie
       at: now,
       actor: "rule",
       action: "request_updated",
-      detail: `The items of the request changed (${because}): the text was composed again by rule 1. The reviewer's wording is kept here.`,
+      detail: `The context of the request changed (${because}: ${editedDropped.because}): the text was composed again by rule 1. The reviewer's wording is kept here, without its approval.`,
       target: "request",
-      from: editedDropped,
+      from: editedDropped.text,
       to: request.text,
     });
   }
@@ -1034,7 +1177,7 @@ function refreshRequest(state: ReviewState, now: string, because: string): Revie
       at: now,
       actor: "rule",
       action: "request_reopened",
-      detail: `The request changed after it was approved (${because}). It is a draft again; the approved text is kept here.`,
+      detail: `The request changed after it was approved (${because}: ${reopened.because}). It is a draft again; the approved text is kept here and approves nothing else.`,
       target: "request",
       from: reopened.approvedText,
       to: request.text,
@@ -1045,12 +1188,19 @@ function refreshRequest(state: ReviewState, now: string, because: string): Revie
 
 /* ---------- Building the review ---------- */
 
+/** Where a draft came from, in words: the recorded run, or a live run, with the transcription reused or called. */
+export function draftOrigin(draft: Draft): string {
+  if (draft.origin !== "live") return "from the recorded run";
+  return draft.transcriptReused ? "computed live (extraction called; transcription reused from an earlier run of the day)" : "computed live (transcription and extraction both called)";
+}
+
 export function buildReview(submission: Submission, draft: Draft, now: string = new Date().toISOString()): ReviewState {
   const propositions = buildPropositions(submission, draft, now);
   const { request } = composeRequest(submission, propositions, undefined, now);
   let state: ReviewState = {
     submission,
     draft,
+    builtAt: now,
     propositions,
     request,
     version: 1,
@@ -1065,7 +1215,7 @@ export function buildReview(submission: Submission, draft: Draft, now: string = 
     at: now,
     actor: "ai",
     action: "draft_built",
-    detail: `Draft ${draft.origin === "live" ? "computed live" : "from the recorded run"}: ${docs} document${docs === 1 ? "" : "s"}, ${recs} recording${recs === 1 ? "" : "s"}, ${propositions.length} propositions, ${draft.withheld.length} withheld by the source check${draft.withheld.length > 0 ? " (listed as not evaluable)" : ""}.`,
+    detail: `Draft ${draftOrigin(draft)}: ${docs} document${docs === 1 ? "" : "s"}, ${recs} recording${recs === 1 ? "" : "s"}, ${propositions.length} propositions, ${draft.withheld.length} withheld by the source check${draft.withheld.length > 0 ? " (listed as not evaluable)" : ""}.`,
   });
   if (request) {
     state = entry(state, {
@@ -1113,7 +1263,8 @@ function detachApproval(state: ReviewState, now: string, because: string): Revie
 
 export function approve(state: ReviewState, id: string, now: string = new Date().toISOString()): ReviewState {
   const p = find(state, id);
-  if (p.finding === "conflicting" && p.state === "proposed") {
+  // A disagreement needs a decision: a correction, or the family asked. An item already in the request has that decision.
+  if (p.finding === "conflicting" && p.state === "proposed" && !p.inRequest) {
     throw new Refused(
       "disagreement_needs_decision",
       "Two sources disagree and nothing was chosen. Correct the statement with what you confirmed, or ask the family.",
@@ -1128,14 +1279,17 @@ export function approve(state: ReviewState, id: string, now: string = new Date()
       target: p.id,
     });
   }
+  const rechecked = p.recheck ? ` Looked at again after ${p.recheck.because}.` : "";
   let next = replace(state, { ...p, state: "approved", approvedAt: now, recheck: undefined });
   next = entry(next, {
     at: now,
     actor: "reviewer",
     action: "approved",
-    detail: `${p.label}: ${p.finding === "withheld" ? "acknowledged as not evaluable" : "approved"} as "${p.statement}".`,
+    detail: `${p.label}: ${p.finding === "withheld" ? "acknowledged as not evaluable" : p.inRequest ? "confirmed as asked of the family" : "approved"} as "${p.statement}".${rechecked}`,
     target: p.id,
   });
+  // The state of a proposition is part of what a file approval names: a change ends that approval.
+  next = detachApproval(next, now, `${p.label} was approved after the file was approved`);
   return withStage(next, now, "Reviewer resolved an open item.");
 }
 
@@ -1231,7 +1385,8 @@ export function approveRequest(state: ReviewState, now: string = new Date().toIS
     status: "approved",
     approvedAt: now,
     approvedText: state.request.text,
-    approvals: [...state.request.approvals, { text: state.request.text, at: now, version: state.version }],
+    approvedContextKey: state.request.contextKey,
+    approvals: [...state.request.approvals, { text: state.request.text, at: now, version: state.version, contextKey: state.request.contextKey }],
   };
   let next: ReviewState = { ...state, request };
   const open = request.items.filter((i) => !i.satisfiedAt).length;
@@ -1239,7 +1394,7 @@ export function approveRequest(state: ReviewState, now: string = new Date().toIS
     at: now,
     actor: "reviewer",
     action: "request_approved",
-    detail: `Request to the family approved (${open} item${open === 1 ? "" : "s"}). Not sent: this sample sends nothing. The approved text is kept here.`,
+    detail: `Request to the family approved (${open} item${open === 1 ? "" : "s"}). Not sent: this sample sends nothing. The approved text is kept here; it approves the message, not the evidence behind its items.`,
     target: "request",
     to: request.text,
   });
@@ -1333,7 +1488,8 @@ function merge(previous: Proposition[], fresh: Proposition[], now: string, becau
     if (old.finding !== next.finding) changed.push(`finding (${FINDING_LABELS[old.finding]} to ${FINDING_LABELS[next.finding]})`);
     if (old.state !== "corrected" && canonical(old.criterion) !== canonical(next.criterion)) changed.push("criterion");
     if (old.nature !== next.nature) changed.push("nature");
-    if (canonical(old.details) !== canonical(next.details)) changed.push("details");
+    if (canonical(old.details) !== canonical(next.details)) changed.push("structured data");
+    if (canonical(old.checked) !== canonical(next.checked)) changed.push("what the code checked");
     const what = changed.length > 0 ? changed.join(", ") : "content";
     const statementChanged = old.statement !== next.statement;
     return {
@@ -1392,7 +1548,7 @@ export function replaceDraft(state: ReviewState, draft: Draft, now: string = new
     at: now,
     actor: "ai",
     action: "draft_replaced",
-    detail: `Draft ${draft.origin === "live" ? "computed live" : "restored from the recorded run"}: ${next.propositions.length} propositions, ${draft.withheld.length} withheld by the source check${draft.withheld.length > 0 ? " (listed as not evaluable)" : ""}.`,
+    detail: `Draft ${draft.origin === "live" ? draftOrigin(draft) : "restored from the recorded run"}: ${next.propositions.length} propositions, ${draft.withheld.length} withheld by the source check${draft.withheld.length > 0 ? " (listed as not evaluable)" : ""}.`,
   });
   next = detachApproval(next, now, "the draft was computed again after the file was approved");
   return withStage(next, now, "Draft replaced.");
@@ -1425,7 +1581,12 @@ export function describeSubmissionChanges(before: Submission, after: Submission)
     else if (a?.status === "received" && b?.status === "received" && a.mediaId !== b.mediaId) changes.push(`${label} replaced`);
   }
   if ((before.signature?.name ?? "") !== (after.signature?.name ?? "")) changes.push(`signature name: "${before.signature?.name ?? ""}" to "${after.signature?.name ?? ""}"`);
+  if ((before.signature?.signedAt ?? "") !== (after.signature?.signedAt ?? "")) changes.push(`signature date: ${before.signature?.signedAt || "none"} to ${after.signature?.signedAt || "none"}`);
   if (before.language !== after.language) changes.push(`form language: ${before.language} to ${after.language}`);
+  if (before.submittedAt !== after.submittedAt) changes.push(`submission date: ${before.submittedAt} to ${after.submittedAt}`);
+  if (before.reference !== after.reference) changes.push(`reference: ${before.reference} to ${after.reference}`);
+  // Anything the lines above do not name is still a change: it is never ignored.
+  if (changes.length === 0 && canonical(before) !== canonical(after)) changes.push("other details of the submission");
   return changes;
 }
 
@@ -1452,7 +1613,8 @@ export function applySubmission(state: ReviewState, submission: Submission, fall
     }
   }
   const withheld = [...state.draft.withheld, ...fallback.withheld.filter((w) => fromFallback.includes(w.mediaId) && !state.draft.withheld.some((x) => x.mediaId === w.mediaId && x.key === w.key))];
-  const draft: Draft = { ...state.draft, documents, recordings, withheld };
+  const media = [...new Set([...(state.draft.media ?? []), ...fromFallback])];
+  const draft: Draft = { ...state.draft, documents, recordings, withheld, media };
   const version = state.version + 1;
   const summary = changes.length > 0 ? changes.join("; ") : `submission version ${submission.version}`;
   let next = rebuild(state, submission, draft, version, now, "the submission changed");
@@ -1470,6 +1632,13 @@ export function applySubmission(state: ReviewState, submission: Submission, fall
 export interface LiveRunExpectation {
   reference: string;
   media: string[];
+  /** The build of the file the run was started for: a file reset or rebuilt since is another file. */
+  builtAt?: string;
+}
+
+/** What a live run is started for: the file, its media, and this build of it. */
+export function liveRunExpectation(state: ReviewState): LiveRunExpectation {
+  return { reference: state.submission.reference, media: mediaOfSubmission(state.submission), builtAt: state.builtAt };
 }
 
 export interface LiveRunResult {
@@ -1481,12 +1650,16 @@ export interface LiveRunResult {
 /**
  * Applies the result of a live run to the file as it is now, not as it was
  * when the run started: a correction made during the wait stands. A result
- * computed for another file, or for other media, is not applied.
+ * computed for another file, for other media, or for another build of the
+ * same file (reset or rebuilt since the run started) is not applied.
  */
 export function applyLiveRun(current: ReviewState, expected: LiveRunExpectation, draft: Draft, now: string = new Date().toISOString()): LiveRunResult {
   const media = [...mediaOfSubmission(current.submission)].sort().join("|");
   if (current.submission.reference !== expected.reference || media !== [...expected.media].sort().join("|")) {
     return { state: current, applied: false, reason: "The file changed while the live run was in progress. Its result was not applied; run it again if you need it." };
+  }
+  if (expected.builtAt !== current.builtAt) {
+    return { state: current, applied: false, reason: "The file was reset while the live run was in progress. Its result was not applied; run it again if you need it." };
   }
   return { state: replaceDraft(current, draft, now), applied: true };
 }
