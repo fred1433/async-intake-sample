@@ -1,6 +1,8 @@
 import type { Criterion, Finding, Nature, PropositionState } from "@/lib/engine/types";
 import { FINDING_LABELS } from "@/lib/engine/review";
 
+export { formatDay, formatSeconds, formatWhen } from "@/lib/format";
+
 const FINDING_TONE: Record<Finding, string> = {
   present: "pill-neutral",
   consistent: "pill-green",
@@ -66,26 +68,6 @@ const CRITERION_LABEL: Record<Criterion["result"], string> = {
 
 export function CriterionPill({ result }: { result: Criterion["result"] }) {
   return <span className={`pill ${CRITERION_TONE[result]}`}>{CRITERION_LABEL[result]}</span>;
-}
-
-export function formatWhen(iso: string): string {
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return iso;
-  return date.toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
-}
-
-export function formatDay(iso: string): string {
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return iso;
-  return date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
-}
-
-export function formatSeconds(seconds: number): string {
-  const tenths = Math.round(seconds * 10);
-  const whole = Math.floor(tenths / 10);
-  const minutes = Math.floor(whole / 60);
-  const rest = whole % 60;
-  return `${minutes}:${String(rest).padStart(2, "0")}.${tenths % 10}`;
 }
 
 export function Kbd({ children }: { children: React.ReactNode }) {

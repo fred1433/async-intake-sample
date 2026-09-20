@@ -11,7 +11,7 @@ import Link from "next/link";
 import { ArrowLeft, ArrowRight, Check, FileText, Mic, Paperclip, X } from "lucide-react";
 import type { FieldValue, Lang, Submission } from "@/lib/engine/types";
 import { dict, type Dict } from "@/lib/i18n";
-import { sampleIntakeDraft, STEPS, submissionFromDraft, type IntakeDraft, type StepId } from "@/lib/intake-draft";
+import { sampleIntakeDraft, STEPS, submissionFromDraft, switchDraftLanguage, type IntakeDraft, type StepId } from "@/lib/intake-draft";
 import { MEDIA, SAMPLE_REFERENCE, SAMPLE_SUBMISSION } from "@/lib/sample";
 import { INTAKE_PREFIX, LANG_KEY, loadJSON, newResumeCode, saveJSON, SUBMISSION_KEY } from "@/lib/storage";
 import { documentItems, promptQuestions, TEMPLATE, type FieldQuestion } from "@/lib/template";
@@ -79,11 +79,12 @@ export function IntakeFlow() {
   const t: Dict = dict(lang);
   const topRef = useRef<HTMLDivElement | null>(null);
 
+  // The screen language only. The language of the messages is the parent's own answer on the form.
   const switchLang = () => {
     const next: Lang = lang === "en" ? "es" : "en";
     setLang(next);
     saveJSON(LANG_KEY, next);
-    if (draft) update({ lang: next, answers: { ...draft.answers, contact_language: next } });
+    if (draft) update(switchDraftLanguage(draft, next));
   };
 
   const update = useCallback(

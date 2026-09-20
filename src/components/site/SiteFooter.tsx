@@ -10,7 +10,7 @@ export function SiteFooter({ note }: { note: string }) {
               The AI Pipe
             </a>
           </span>
-          <a href="https://github.com/fred1433/async-intake" className="underline-offset-4 hover:underline">
+          <a href="https://github.com/fred1433/async-intake-sample" className="underline-offset-4 hover:underline">
             Source
           </a>
         </p>

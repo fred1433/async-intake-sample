@@ -9,7 +9,7 @@ const COLUMNS = (recorded: string) => [
     title: "What runs for real",
     lines: [
       "Transcription (a Google model) and extraction (an Anthropic model), on request, on the sample media only.",
-      "Every quote is checked against the document text; every value, date, day, hour, place and negation against the quoted words; every audio segment is located from those words and checked against the recording's length. What fails is listed as not evaluable, never as a fact.",
+      "Every quote is checked against the document text; every value and date against the quoted passage; every day, hour, place and negation against the spoken clause the quote comes from; every audio segment is located from those words and checked against the recording's length. An hour said without AM or PM, a statement the model marks uncertain, and any free statement are to confirm, never a fact. What fails is listed as not evaluable.",
       `The review shown first was recorded on ${recorded}. It can be run again under a daily cap; past the cap, the recorded review stays and says so.`,
     ],
   },

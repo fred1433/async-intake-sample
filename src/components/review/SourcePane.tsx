@@ -183,9 +183,9 @@ function FormAnswer({ questionId, value }: { questionId: string; value: string }
   );
 }
 
-export function SourcePane({ evidence, state }: { evidence: Evidence | null; state: ReviewState }) {
+export function SourcePane({ evidence, state, empty }: { evidence: Evidence | null; state: ReviewState; empty?: string }) {
   if (!evidence) {
-    return <p className="text-[13px] text-ink-3">Select a proposition to see its source.</p>;
+    return <p className="text-[13px] text-ink-3">{empty ?? "Select a proposition to see its source."}</p>;
   }
   if (evidence.kind === "form") return <FormAnswer questionId={evidence.questionId} value={evidence.value} />;
   const media = MEDIA[evidence.mediaId];

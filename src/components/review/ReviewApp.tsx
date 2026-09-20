@@ -19,12 +19,14 @@ import {
   documentCount,
   editRequest,
   focalProposition,
+  liveRunExpectation,
   STAGE_LABELS,
 } from "@/lib/engine/review";
 import { Refused, type Draft, type ReviewState } from "@/lib/engine/types";
+import { draftOriginLabel } from "@/lib/draft-origin";
 import { dict } from "@/lib/i18n";
-import { isSampleSubmission, loadReview, mediaForLiveRun, persistReview, resetToSample } from "@/lib/review-store";
-import { formatDay, formatWhen, Kbd } from "./bits";
+import { isSampleSubmission, loadReview, persistReview, resetToSample } from "@/lib/review-store";
+import { formatWhen, Kbd } from "./bits";
 import { HelpDialog, JournalPanel, RequestDialog } from "./Panels";
 import { PropositionDetail } from "./PropositionDetail";
 import { PropositionList } from "./PropositionList";
@@ -42,6 +44,8 @@ const MOBILE = "(max-width: 767px)";
 export function ReviewApp() {
   const [state, setState] = useState<ReviewState>(() => loadReview());
   const stateRef = useRef(state);
+  // Counts the resets: a live run started before a reset belongs to the file that was reset, not to the new one.
+  const generationRef = useRef(0);
   const [selectedId, setSelectedIdRaw] = useState<string | null>(() => focalProposition(state)?.id ?? state.propositions[0]?.id ?? null);
   const [activeEvidence, setActiveEvidence] = useState(0);
   const [editing, setEditing] = useState(false);
@@ -98,15 +102,21 @@ export function ReviewApp() {
     [state, selectedId, setSelectedId],
   );
 
+  // An item in the request is reviewed through the request, unless something it rests on changed: then it needs its own look.
+  const ownReview = (p: ReviewState["propositions"][number]) => !p.inRequest || Boolean(p.recheck);
+
   const doApprove = useCallback(() => {
-    if (!selected || selected.inRequest) return;
+    if (!selected || !ownReview(selected)) return;
     const wasApproved = selected.state === "approved" && !selected.recheck;
     try {
       commit(approve(state, selected.id));
       setToast(
         wasApproved
           ? { text: "Already approved. Nothing changed; the journal noted the repeat.", tone: "warn" }
-          : { text: `${selected.label}: ${selected.finding === "withheld" ? "acknowledged as not evaluable" : "approved"}.`, tone: "ok" },
+          : {
+              text: `${selected.label}: ${selected.finding === "withheld" ? "acknowledged as not evaluable" : selected.inRequest ? "looked at again and confirmed as asked of the family" : "approved"}.`,
+              tone: "ok",
+            },
       );
     } catch (error) {
       setToast({ text: error instanceof Error ? error.message : "Could not approve.", tone: "warn" });
@@ -114,7 +124,7 @@ export function ReviewApp() {
   }, [state, selected, commit]);
 
   const startEdit = useCallback(() => {
-    if (!selected || selected.inRequest) return;
+    if (!selected || !ownReview(selected)) return;
     setEditText(selected.statement);
     setEditing(true);
   }, [selected]);
@@ -195,15 +205,21 @@ export function ReviewApp() {
   const runAgain = useCallback(async () => {
     if (running) return;
     setRunning(true);
-    // What the run is for. The result is applied to the file as it is when the run comes back, and only if it is still this file.
-    const expected = { reference: state.submission.reference, media: mediaForLiveRun(state.submission) };
+    // What the run is for: this file, these media, this build of it. The result is applied to the file as it is when
+    // the run comes back, and only if it is still that file: a reset in between makes the result unwanted.
+    const expected = liveRunExpectation(state);
+    const generation = generationRef.current;
     try {
       const response = await fetch("/api/rerun", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ media: expected.media }),
       });
-      const payload = (await response.json()) as { draft?: Draft; error?: string };
+      const payload = (await response.json()) as { draft?: Draft; error?: string; usage?: { transcription?: { cached?: boolean } | null } };
+      if (generation !== generationRef.current) {
+        setToast({ text: "The file was reset while the live run was in progress. Its result was not applied; run it again if you need it.", tone: "warn" });
+        return;
+      }
       if (!response.ok || !payload.draft) {
         setToast({ text: payload.error ?? "The live run did not come back. The recorded review stays available.", tone: "warn" });
         return;
@@ -214,8 +230,9 @@ export function ReviewApp() {
         return;
       }
       commit(result.state);
+      const reused = payload.draft.transcriptReused || payload.usage?.transcription?.cached;
       setToast({
-        text: `Live draft computed at ${formatWhen(payload.draft.computedAt)}: ${result.state.propositions.length} propositions, ${payload.draft.withheld.length} withheld by the source check${payload.draft.withheld.length > 0 ? ", listed as not evaluable" : ""}.`,
+        text: `Live draft computed at ${formatWhen(payload.draft.computedAt)}${reused ? " (extraction called; transcription reused from an earlier run today)" : " (transcription and extraction both called)"}: ${result.state.propositions.length} propositions, ${payload.draft.withheld.length} withheld by the source check${payload.draft.withheld.length > 0 ? ", listed as not evaluable" : ""}.`,
         tone: "ok",
       });
     } catch {
@@ -226,6 +243,7 @@ export function ReviewApp() {
   }, [state, running, commit]);
 
   const reset = useCallback(() => {
+    generationRef.current += 1;
     const fresh = resetToSample();
     commit(fresh);
     setSelectedId(focalProposition(fresh)?.id ?? null);
@@ -289,8 +307,6 @@ export function ReviewApp() {
   const check = canApproveFile(state);
   const childName = `${state.submission.answers.child_last_name ?? ""}, ${state.submission.answers.child_first_name ?? ""}`.replace(/^, |, $/g, "");
   const openRequestItems = state.request?.items.filter((i) => !i.satisfiedAt).length ?? 0;
-  const draftLabel =
-    state.draft.origin === "live" ? `Live draft, computed ${formatWhen(state.draft.computedAt)}` : `Recorded review of ${formatDay(state.draft.computedAt)}`;
   const evidence = selected?.evidence[activeEvidence] ?? selected?.evidence[0] ?? null;
 
   return (
@@ -349,8 +365,7 @@ export function ReviewApp() {
             </button>
           </div>
           <p className="basis-full text-[12px] text-ink-3" data-testid="draft-origin">
-            {draftLabel}
-            {state.draft.origin === "recorded" ? ": served as stored, no model call was made to show it." : ": the two model calls ran on the sample media for this view."}
+            {draftOriginLabel(state.draft)}
           </p>
         </div>
       </header>
@@ -388,7 +403,7 @@ export function ReviewApp() {
           </section>
 
           <section className={`surface-flat p-4 md:col-span-2 md:max-h-[calc(100vh-256px)] md:overflow-y-auto md:p-5 xl:col-span-1 ${mobileDetail ? "" : "hidden md:block"}`}>
-            <SourcePane evidence={evidence} state={state} />
+            <SourcePane evidence={evidence} state={state} empty={selected && selected.evidence.length === 0 ? "This item names no source in this file: the draft named a file the submission does not hold. There is nothing to show for it, which is the point." : undefined} />
           </section>
         </div>
 

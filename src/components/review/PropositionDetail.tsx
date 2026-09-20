@@ -56,6 +56,9 @@ export function PropositionDetail({
 
   const byRule = p.nature === "rule";
   const inApprovedRequest = p.inRequest && request?.status === "approved";
+  // An item in the request is reviewed through the request, unless something it rests on changed since: then it needs its own look,
+  // and approving the message again does not give it one.
+  const ownReview = !p.inRequest || Boolean(p.recheck);
   const previous = p.history.length > 1 ? p.history[p.history.length - 2] : null;
   const current = p.history[p.history.length - 1];
 
@@ -73,7 +76,8 @@ export function PropositionDetail({
         <div className="mt-3 flex items-start gap-2 rounded-lg border border-rose-soft bg-rose-soft/60 px-3 py-2 text-[13px] text-rose-ink">
           <AlertTriangle className="mt-0.5 size-4 shrink-0" />
           <span>
-            Needs another look: {p.recheck.because} ({formatWhen(p.recheck.at)}). Approve again once checked.
+            Needs another look: {p.recheck.because} ({formatWhen(p.recheck.at)}).{" "}
+            {p.inRequest ? "Confirm it as it stands, or correct it; approving the message again does not review it." : "Approve again once checked."}
           </span>
         </div>
       )}
@@ -200,22 +204,35 @@ export function PropositionDetail({
 
       <div className="mt-auto pb-1 pt-5">
         <div className="flex flex-wrap items-center gap-2">
-          {p.inRequest ? (
-            <button type="button" onClick={onOpenRequest} className="inline-flex h-10 items-center gap-2 rounded-lg bg-ink px-3.5 text-[13.5px] font-semibold text-white">
+          {p.inRequest && (
+            <button
+              type="button"
+              onClick={onOpenRequest}
+              className={`inline-flex h-10 items-center gap-2 rounded-lg px-3.5 text-[13.5px] font-semibold ${ownReview ? "border border-line bg-white text-ink hover:bg-muted" : "bg-ink text-white"}`}
+            >
               <Send className="size-4" />
               {inApprovedRequest ? "See the approved request" : "Review the request draft"}
-              <Kbd>R</Kbd>
+              {!ownReview && <Kbd>R</Kbd>}
             </button>
-          ) : (
+          )}
+          {ownReview && (
             <>
               <button
                 type="button"
                 onClick={onApprove}
-                disabled={editing || (p.state === "approved" && !p.recheck) || (p.finding === "conflicting" && p.state === "proposed")}
+                disabled={editing || (p.state === "approved" && !p.recheck) || (p.finding === "conflicting" && p.state === "proposed" && !p.inRequest)}
                 className="inline-flex h-10 items-center gap-2 rounded-lg bg-brand px-3.5 text-[13.5px] font-semibold text-white hover:bg-brand-strong disabled:opacity-40"
               >
                 <Check className="size-4" />
-                {p.state === "approved" && !p.recheck ? (p.finding === "withheld" ? "Acknowledged" : "Approved") : p.finding === "withheld" ? "Acknowledge" : "Approve"}
+                {p.state === "approved" && !p.recheck
+                  ? p.finding === "withheld"
+                    ? "Acknowledged"
+                    : "Approved"
+                  : p.finding === "withheld"
+                    ? "Acknowledge"
+                    : p.inRequest
+                      ? "Confirm as it stands"
+                      : "Approve"}
                 <Kbd>A</Kbd>
               </button>
               <button
@@ -228,7 +245,7 @@ export function PropositionDetail({
                 Correct
                 <Kbd>E</Kbd>
               </button>
-              {p.requestable && (
+              {p.requestable && !p.inRequest && (
                 <button
                   type="button"
                   onClick={onAddToRequest}
