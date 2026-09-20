@@ -115,7 +115,7 @@ export function DeviceCheck({ t, enabled }: { t: Dict; enabled: boolean }) {
           <p className="text-[15px] font-semibold text-ink">{t.prompt.deviceTitle}</p>
           <p className="mt-1 text-[13.5px] leading-[1.55] text-ink-3">{t.prompt.deviceHelp}</p>
         </div>
-        <span className="pill pill-neutral shrink-0">local</span>
+        <span className="pill pill-neutral shrink-0">{t.prompt.localBadge}</span>
       </div>
 
       <div className="mt-4 overflow-hidden rounded-xl bg-[#1f1d1a]" style={{ aspectRatio: "4 / 3" }}>

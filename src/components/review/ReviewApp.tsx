@@ -4,20 +4,21 @@
  * The reviewer's side. Dense, fast, keyboard first. Every action goes through
  * the engine; this component only decides what is on screen.
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { ArrowLeft, BookOpen, ChevronLeft, HelpCircle, RefreshCw, RotateCcw, Send } from "lucide-react";
 import { TopBanner } from "@/components/site/TopBanner";
 import {
   addToRequest,
+  applyLiveRun,
   approve,
   approveFile,
   approveRequest,
   canApproveFile,
   correct,
   documentCount,
+  editRequest,
   focalProposition,
-  replaceDraft,
   STAGE_LABELS,
 } from "@/lib/engine/review";
 import { Refused, type Draft, type ReviewState } from "@/lib/engine/types";
@@ -36,36 +37,46 @@ const STAGE_TONE: Record<ReviewState["stage"], string> = {
   ready_for_scheduling: "pill-green",
 };
 
+const MOBILE = "(max-width: 767px)";
+
 export function ReviewApp() {
   const [state, setState] = useState<ReviewState>(() => loadReview());
+  const stateRef = useRef(state);
   const [selectedId, setSelectedIdRaw] = useState<string | null>(() => focalProposition(state)?.id ?? state.propositions[0]?.id ?? null);
   const [activeEvidence, setActiveEvidence] = useState(0);
   const [editing, setEditing] = useState(false);
   const [editText, setEditText] = useState("");
   const [showJournal, setShowJournal] = useState(false);
-  const [showRequest, setShowRequest] = useState(false);
+  // Arriving from the home page: open the request when asked, and on a phone open the focal item at once.
+  // This component renders on the client only, so the window is there on first render.
+  const [showRequest, setShowRequest] = useState(() => new URLSearchParams(window.location.search).get("open") === "request");
   const [showHelp, setShowHelp] = useState(false);
-  const [mobileDetail, setMobileDetail] = useState(false);
+  const [mobileDetail, setMobileDetail] = useState(() => window.matchMedia(MOBILE).matches);
   const [running, setRunning] = useState(false);
   const [toast, setToast] = useState<{ text: string; tone: "ok" | "warn" } | null>(null);
   const t = dict("en");
 
   useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
+
+  useEffect(() => {
     if (!toast) return;
-    const timer = window.setTimeout(() => setToast(null), 6000);
+    const timer = window.setTimeout(() => setToast(null), 7000);
     return () => window.clearTimeout(timer);
   }, [toast]);
 
   const commit = useCallback((next: ReviewState) => {
     persistReview(next);
+    stateRef.current = next;
     setState(next);
   }, []);
 
   const selected = useMemo(() => state.propositions.find((p) => p.id === selectedId) ?? null, [state, selectedId]);
 
-  const setSelectedId = useCallback((id: string | null) => {
+  const setSelectedId = useCallback((id: string | null, evidenceIndex = 0) => {
     setSelectedIdRaw(id);
-    setActiveEvidence(0);
+    setActiveEvidence(evidenceIndex);
     setEditing(false);
   }, []);
 
@@ -92,7 +103,11 @@ export function ReviewApp() {
     const wasApproved = selected.state === "approved" && !selected.recheck;
     try {
       commit(approve(state, selected.id));
-      setToast(wasApproved ? { text: "Already approved. Nothing changed; the journal noted the repeat.", tone: "warn" } : { text: `${selected.label}: approved.`, tone: "ok" });
+      setToast(
+        wasApproved
+          ? { text: "Already approved. Nothing changed; the journal noted the repeat.", tone: "warn" }
+          : { text: `${selected.label}: ${selected.finding === "withheld" ? "acknowledged as not evaluable" : "approved"}.`, tone: "ok" },
+      );
     } catch (error) {
       setToast({ text: error instanceof Error ? error.message : "Could not approve.", tone: "warn" });
     }
@@ -131,12 +146,38 @@ export function ReviewApp() {
 
   const doApproveRequest = useCallback(() => {
     try {
-      commit(approveRequest(state));
-      setToast({ text: "Request approved. Not sent: this sample sends nothing.", tone: "ok" });
+      const next = approveRequest(state);
+      commit(next);
+      setShowRequest(false);
+      // The next thing worth a look: the conflict between the form and the recording, with its segment.
+      const conflict = next.propositions.find((p) => p.id === "xcheck:days" && p.state === "proposed" && (p.finding === "conflicting" || p.finding === "to_confirm"));
+      if (conflict) {
+        const audio = conflict.evidence.findIndex((e) => e.kind === "audio");
+        setSelectedId(conflict.id, audio === -1 ? 0 : audio);
+        setMobileDetail(true);
+        setToast({ text: "Request approved, not sent. Next: the days the form and the recording disagree on, with the segment already cued. Nothing else is approved.", tone: "ok" });
+      } else {
+        setToast({ text: "Request approved. Not sent: this sample sends nothing.", tone: "ok" });
+      }
     } catch (error) {
       setToast({ text: error instanceof Error ? error.message : "Could not approve the request.", tone: "warn" });
     }
-  }, [state, commit]);
+  }, [state, commit, setSelectedId]);
+
+  const doEditRequest = useCallback(
+    (text: string) => {
+      try {
+        const next = editRequest(state, text);
+        if (next !== state) {
+          commit(next);
+          setToast({ text: "Request text corrected. The rule's version is in the journal.", tone: "ok" });
+        }
+      } catch (error) {
+        setToast({ text: error instanceof Error ? error.message : "Could not correct the request.", tone: "warn" });
+      }
+    },
+    [state, commit],
+  );
 
   const doApproveFile = useCallback(() => {
     const shownVersion = state.version;
@@ -154,20 +195,29 @@ export function ReviewApp() {
   const runAgain = useCallback(async () => {
     if (running) return;
     setRunning(true);
+    // What the run is for. The result is applied to the file as it is when the run comes back, and only if it is still this file.
+    const expected = { reference: state.submission.reference, media: mediaForLiveRun(state.submission) };
     try {
       const response = await fetch("/api/rerun", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ media: mediaForLiveRun(state.submission) }),
+        body: JSON.stringify({ media: expected.media }),
       });
       const payload = (await response.json()) as { draft?: Draft; error?: string };
       if (!response.ok || !payload.draft) {
         setToast({ text: payload.error ?? "The live run did not come back. The recorded review stays available.", tone: "warn" });
         return;
       }
-      const next = replaceDraft(state, payload.draft);
-      commit(next);
-      setToast({ text: `Computed just now: ${next.propositions.length} propositions, ${payload.draft.withheld.length} withheld by the source check.`, tone: "ok" });
+      const result = applyLiveRun(stateRef.current, expected, payload.draft);
+      if (!result.applied) {
+        setToast({ text: result.reason ?? "The live result was not applied.", tone: "warn" });
+        return;
+      }
+      commit(result.state);
+      setToast({
+        text: `Live draft computed at ${formatWhen(payload.draft.computedAt)}: ${result.state.propositions.length} propositions, ${payload.draft.withheld.length} withheld by the source check${payload.draft.withheld.length > 0 ? ", listed as not evaluable" : ""}.`,
+        tone: "ok",
+      });
     } catch {
       setToast({ text: "The live run did not come back. The recorded review stays available.", tone: "warn" });
     } finally {
@@ -177,11 +227,11 @@ export function ReviewApp() {
 
   const reset = useCallback(() => {
     const fresh = resetToSample();
-    setState(fresh);
+    commit(fresh);
     setSelectedId(focalProposition(fresh)?.id ?? null);
-    setMobileDetail(false);
+    setMobileDetail(window.matchMedia(MOBILE).matches);
     setToast({ text: "Back to the sample file and the recorded review.", tone: "ok" });
-  }, [setSelectedId]);
+  }, [commit, setSelectedId]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -240,7 +290,7 @@ export function ReviewApp() {
   const childName = `${state.submission.answers.child_last_name ?? ""}, ${state.submission.answers.child_first_name ?? ""}`.replace(/^, |, $/g, "");
   const openRequestItems = state.request?.items.filter((i) => !i.satisfiedAt).length ?? 0;
   const draftLabel =
-    state.draft.origin === "live" ? `Computed just now · ${formatWhen(state.draft.computedAt)}` : `Recorded review · ${formatDay(state.draft.computedAt)}`;
+    state.draft.origin === "live" ? `Live draft, computed ${formatWhen(state.draft.computedAt)}` : `Recorded review of ${formatDay(state.draft.computedAt)}`;
   const evidence = selected?.evidence[activeEvidence] ?? selected?.evidence[0] ?? null;
 
   return (
@@ -253,7 +303,7 @@ export function ReviewApp() {
             <span className="hidden sm:inline">Sample Behavioral Health</span>
             <span className="sm:hidden">Home</span>
           </Link>
-          <div className="flex min-w-0 items-center gap-2">
+          <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
             <span className="truncate text-[14px] font-semibold text-ink">{childName}</span>
             <span className="text-[12.5px] text-ink-3">
               {state.submission.reference} · v{state.version}
@@ -264,7 +314,6 @@ export function ReviewApp() {
             </span>
           </div>
           <div className="ml-auto flex flex-wrap items-center gap-1.5">
-            <span className="hidden text-[12px] text-ink-3 lg:inline">{draftLabel}</span>
             <button
               type="button"
               onClick={() => void runAgain()}
@@ -299,19 +348,23 @@ export function ReviewApp() {
               <RotateCcw className="size-4" />
             </button>
           </div>
+          <p className="basis-full text-[12px] text-ink-3" data-testid="draft-origin">
+            {draftLabel}
+            {state.draft.origin === "recorded" ? ": served as stored, no model call was made to show it." : ": the two model calls ran on the sample media for this view."}
+          </p>
         </div>
       </header>
 
       <main className="mx-auto w-full max-w-[1500px] flex-1 px-4 py-4 md:px-5">
         <div className="grid gap-4 md:grid-cols-[300px_minmax(0,1fr)] xl:grid-cols-[320px_minmax(0,1fr)_minmax(0,0.95fr)]">
-          <aside className={`surface-flat overflow-hidden md:max-h-[calc(100vh-236px)] md:overflow-y-auto ${mobileDetail ? "hidden md:block" : ""}`}>
+          <aside className={`surface-flat overflow-hidden md:max-h-[calc(100vh-256px)] md:overflow-y-auto ${mobileDetail ? "hidden md:block" : ""}`}>
             <PropositionList propositions={state.propositions} selectedId={selectedId} onSelect={(id) => select(id, true)} />
           </aside>
 
-          <section className={`surface-flat p-4 md:max-h-[calc(100vh-236px)] md:overflow-y-auto md:p-5 ${mobileDetail ? "" : "hidden md:block"}`}>
+          <section className={`surface-flat p-4 md:max-h-[calc(100vh-256px)] md:overflow-y-auto md:p-5 ${mobileDetail ? "" : "hidden md:block"}`}>
             <button type="button" onClick={() => setMobileDetail(false)} className="mb-3 inline-flex items-center gap-1 text-[13px] font-medium text-ink-3 md:hidden">
               <ChevronLeft className="size-4" />
-              Back to the list
+              All {state.propositions.length} propositions
             </button>
             {selected ? (
               <PropositionDetail
@@ -334,7 +387,7 @@ export function ReviewApp() {
             )}
           </section>
 
-          <section className={`surface-flat p-4 md:col-span-2 md:max-h-[calc(100vh-236px)] md:overflow-y-auto md:p-5 xl:col-span-1 ${mobileDetail ? "" : "hidden md:block"}`}>
+          <section className={`surface-flat p-4 md:col-span-2 md:max-h-[calc(100vh-256px)] md:overflow-y-auto md:p-5 xl:col-span-1 ${mobileDetail ? "" : "hidden md:block"}`}>
             <SourcePane evidence={evidence} state={state} />
           </section>
         </div>
@@ -344,7 +397,7 @@ export function ReviewApp() {
             {state.approval && !state.approval.detached ? (
               <p className="text-[13.5px] text-ink">
                 <span className="font-semibold text-green-ink">Version {state.approval.version} approved</span> by the reviewer at {formatWhen(state.approval.at)}.{" "}
-                <span className="text-ink-3">Stage: {STAGE_LABELS[state.stage]}. Content {state.approval.hash}.</span>
+                <span className="text-ink-3">Stage: {STAGE_LABELS[state.stage]}. Content {state.approval.hash.slice(0, 16)}.</span>
               </p>
             ) : (
               <p className="text-[13.5px] text-ink-2">
@@ -378,11 +431,11 @@ export function ReviewApp() {
         )}
 
         <p className="mt-6 text-center text-[12px] text-ink-3">
-          {t.sampleOnly} · Reviewer actions are kept in this browser. · Press <Kbd>?</Kbd> for the keyboard.
+          {t.sampleOnly} · Reviewer actions are kept on this device. · Press <Kbd>?</Kbd> for the keyboard.
         </p>
       </main>
 
-      <RequestDialog open={showRequest} onOpenChange={setShowRequest} request={state.request} onApprove={doApproveRequest} />
+      <RequestDialog open={showRequest} onOpenChange={setShowRequest} request={state.request} onApprove={doApproveRequest} onEdit={doEditRequest} />
       <HelpDialog open={showHelp} onOpenChange={setShowHelp} />
 
       {toast && (

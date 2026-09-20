@@ -906,8 +906,9 @@ export function requestText(submission: Submission, propositions: Proposition[],
         else lines.push(`- ${t.confirmDaysNone(dayList(details.works ?? [], lang))}`);
       } else if (item.propositionId === "xcheck:time") {
         const formTime = optionLabel(lang, details.formTime?.[0] ?? "").toLowerCase();
-        const hour = details.recordedHour?.[0];
-        lines.push(`- ${hour ? t.confirmTime(formTime, `${hour}:00`) : t.confirmTimeUnknown(formTime)}`);
+        const hour = details.recordedHour?.[0] ? Number(details.recordedHour[0]) : null;
+        const clock = hour === null ? "" : lang === "es" ? `${hour}:00` : `${hour % 12 === 0 ? 12 : hour % 12}:00 ${hour < 12 ? "am" : "pm"}`;
+        lines.push(`- ${hour !== null ? t.confirmTime(formTime, clock) : t.confirmTimeUnknown(formTime)}`);
       } else if (item.propositionId === "xcheck:location") {
         const formPlace = optionLabel(lang, details.formPlace?.[0] ?? "").toLowerCase();
         const recorded = details.recordedPlace?.[0];

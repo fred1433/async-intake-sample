@@ -8,7 +8,10 @@ export function Hero() {
   const state = buildReview(SAMPLE_SUBMISSION, RECORDED_DRAFT, RECORDED_DRAFT.computedAt);
   const focal = focalProposition(state)!;
   const count = documentCount(state);
-  const requestExcerpt = state.request?.text.split("\n").filter(Boolean).slice(0, 3).join(" ") ?? "";
+  // The greeting, the line that says what is missing, and the item itself.
+  const requestLines = state.request?.text.split("\n").filter(Boolean) ?? [];
+  const itemIndex = requestLines.findIndex((line) => line.startsWith("- "));
+  const requestExcerpt = itemIndex === -1 ? requestLines.slice(0, 3).join(" ") : `${requestLines[0]} ${requestLines[itemIndex - 1]} ${requestLines[itemIndex].slice(2)}.`;
 
   return (
     <section className="hero-glow">
@@ -21,8 +24,9 @@ export function Hero() {
             Draft request ready for review.
           </h1>
           <p className="mt-8 max-w-xl text-[17px] leading-[1.65] text-ink-2 md:text-[19px]">
-            A parent finished the intake on a phone. The AI drafted the file one claim at a time, each with its source.
-            The reviewer checks the source, corrects what needs it, and approves. Nothing is sent or finalized before that.
+            A parent finished the intake on a phone. The AI drafted the file one claim at a time, each with its source, and the
+            code checked every claim against it. The reviewer checks the source, corrects what needs it, and approves. Nothing is
+            sent or finalized before that, and an approval ends the moment its content changes.
           </p>
           <div className="mt-10 flex flex-wrap items-center gap-3">
             <Link
@@ -59,11 +63,11 @@ export function Hero() {
             </div>
             <div className="mt-6 rounded-xl border border-line bg-paper p-4">
               <p className="text-[12px] font-semibold uppercase tracking-[0.12em] text-brand-strong">Rule 1 · request prepared, not sent</p>
-              <p className="mt-2 line-clamp-3 text-[14px] leading-[1.6] text-ink-2">{requestExcerpt}</p>
+              <p className="mt-2 line-clamp-4 text-[14px] leading-[1.6] text-ink-2">{requestExcerpt}</p>
             </div>
             <div className="mt-5 flex items-center justify-between">
-              <span className="text-[13px] text-ink-3">Draft by AI · waiting for the reviewer</span>
-              <Link href="/review" className="inline-flex items-center gap-1.5 text-[14px] font-semibold text-brand-strong hover:underline underline-offset-4">
+              <span className="text-[13px] text-ink-3">Prepared by rule · awaiting review</span>
+              <Link href="/review?open=request" className="inline-flex items-center gap-1.5 text-[14px] font-semibold text-brand-strong hover:underline underline-offset-4">
                 Review the request
                 <ArrowRight className="size-4" />
               </Link>

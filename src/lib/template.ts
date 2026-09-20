@@ -19,9 +19,8 @@ export interface FieldQuestion {
 export interface PromptQuestion {
   kind: "prompt";
   id: string;
+  /** Preparation time shown before the recorded answer. The only timing this sample enforces. */
   prepSeconds: number;
-  maxSeconds: number;
-  retakes: number;
   /** The fictional recording the page provides for this prompt. */
   sampleMediaId: string;
 }
@@ -99,8 +98,6 @@ export const TEMPLATE: IntakeTemplate = {
           kind: "prompt",
           id: "scheduling_prompt",
           prepSeconds: 20,
-          maxSeconds: 60,
-          retakes: 1,
           sampleMediaId: "recording-scheduling",
         },
       ],

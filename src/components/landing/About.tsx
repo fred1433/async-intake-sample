@@ -8,8 +8,9 @@ const COLUMNS = (recorded: string) => [
   {
     title: "What runs for real",
     lines: [
-      "Transcription of the sample recording and extraction from the sample documents, by third-party models, on request.",
-      "Every quote is checked against the document text. Every audio segment is located from the quoted words. What fails the check is withheld and listed, never shown as a fact.",
+      "Transcription of the sample recording by a Google model, and extraction from the sample documents and the transcript by an Anthropic model, on request.",
+      "Every quote is checked against the document text, every value against its quote, every date against the passage. Every audio segment is located from the quoted words within the timestamps the transcription returned, and checked against the length of the recording. Days, hours, places and negations are checked in the quoted words. What fails is listed as not evaluable, never shown as a fact.",
+      "The wording of a rephrased statement is the model's: the reviewer judges it against the recording. Whether a recording was cut off is what the transcription reports; the code does not detect that on its own.",
       `The review shown first was recorded on ${recorded}. The button in the reviewer view runs it again, under a daily cap. When the cap is reached, the recorded review stays available and says it is recorded.`,
     ],
   },
@@ -17,7 +18,7 @@ const COLUMNS = (recorded: string) => [
     title: "What stays on your device",
     lines: [
       "The camera and microphone check in the intake flow records on your device and sends nothing.",
-      "Form progress and the reviewer's actions are kept in your browser, not on a server.",
+      "Form progress and the reviewer's actions are kept on your device, not on a server. Saving the form sends nothing.",
     ],
   },
   {

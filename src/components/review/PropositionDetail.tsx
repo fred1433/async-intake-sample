@@ -159,6 +159,21 @@ export function PropositionDetail({
             Quoted: <span className="italic">“{p.evidence[activeEvidence].quote}”</span>
           </p>
         )}
+        {p.checked && p.checked.length > 0 && (
+          <div className="mt-2 rounded-lg border border-line bg-white px-3 py-2">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink-3">Checked by the code</p>
+            <ul className="mt-1 list-disc space-y-0.5 pl-4 text-[12.5px] leading-[1.5] text-ink-2">
+              {p.checked.map((line) => (
+                <li key={line}>{line}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {p.finding === "withheld" && (
+          <p className="mt-2 text-[12.5px] leading-[1.5] text-ink-3">
+            The model proposed this and the code refused it. It is listed so nothing disappears: acknowledge it, or correct it with what the source really says.
+          </p>
+        )}
       </div>
 
       <div className="mt-4">
@@ -200,7 +215,7 @@ export function PropositionDetail({
                 className="inline-flex h-10 items-center gap-2 rounded-lg bg-brand px-3.5 text-[13.5px] font-semibold text-white hover:bg-brand-strong disabled:opacity-40"
               >
                 <Check className="size-4" />
-                {p.state === "approved" && !p.recheck ? "Approved" : "Approve"}
+                {p.state === "approved" && !p.recheck ? (p.finding === "withheld" ? "Acknowledged" : "Approved") : p.finding === "withheld" ? "Acknowledge" : "Approve"}
                 <Kbd>A</Kbd>
               </button>
               <button

@@ -2,37 +2,22 @@
 
 /**
  * The parent's side: a guided form, two document items, one recorded prompt, a
- * signature, then review and send. Progress is saved in this browser under a
- * resume code. The only files that can be attached are the sample files the
- * page provides; nothing of the visitor's is uploaded.
+ * signature, then review and save. Progress is kept on this device under a
+ * code. The only files that can be attached are the sample files the page
+ * provides; nothing of the visitor's is uploaded, and saving sends nothing.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { ArrowLeft, ArrowRight, Check, FileText, Mic, Paperclip, X } from "lucide-react";
-import type { DocumentSlot, FieldValue, Lang, RecordingSlot, Submission } from "@/lib/engine/types";
+import type { FieldValue, Lang, Submission } from "@/lib/engine/types";
 import { dict, type Dict } from "@/lib/i18n";
-import { MEDIA, SAMPLE_SUBMISSION } from "@/lib/sample";
+import { sampleIntakeDraft, STEPS, submissionFromDraft, type IntakeDraft, type StepId } from "@/lib/intake-draft";
+import { MEDIA, SAMPLE_REFERENCE, SAMPLE_SUBMISSION } from "@/lib/sample";
 import { INTAKE_PREFIX, LANG_KEY, loadJSON, newResumeCode, saveJSON, SUBMISSION_KEY } from "@/lib/storage";
 import { documentItems, promptQuestions, TEMPLATE, type FieldQuestion } from "@/lib/template";
 import { TopBanner } from "@/components/site/TopBanner";
 import { DeviceCheck } from "./DeviceCheck";
 import { SignaturePad } from "./SignaturePad";
-
-interface IntakeDraft {
-  code: string;
-  lang: Lang;
-  step: number;
-  answers: Record<string, FieldValue>;
-  documents: Record<string, DocumentSlot>;
-  recordings: Record<string, RecordingSlot>;
-  signature?: { name: string; signedAt: string; ink: boolean };
-  startedAt: string;
-  submittedVersion?: number;
-  submittedAt?: string;
-}
-
-const STEPS = ["child", "guardian", "scheduling", "documents", "recorded", "signature", "review"] as const;
-type StepId = (typeof STEPS)[number];
 
 function freshDraft(lang: Lang): IntakeDraft {
   return {
@@ -88,7 +73,7 @@ export function IntakeFlow() {
   });
   const [resumeCode, setResumeCode] = useState("");
   const [resumeError, setResumeError] = useState(false);
-  const [sent, setSent] = useState<{ reference: string; version: number } | null>(null);
+  const [saved, setSaved] = useState<{ reference: string; version: number } | null>(null);
   const [prepDeadline, setPrepDeadline] = useState<number | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const t: Dict = dict(lang);
@@ -118,12 +103,17 @@ export function IntakeFlow() {
     fresh.answers.contact_language = lang;
     saveJSON(INTAKE_PREFIX + fresh.code, fresh);
     setDraft(fresh);
-    setSent(null);
+    setSaved(null);
   };
 
   const resume = () => {
     const code = resumeCode.trim().toUpperCase();
-    const found = loadJSON<IntakeDraft>(INTAKE_PREFIX + code);
+    let found = loadJSON<IntakeDraft>(INTAKE_PREFIX + code);
+    // The sample file's form is always resumable: it is the one the reviewer view shows.
+    if (!found && code === SAMPLE_REFERENCE) {
+      found = sampleIntakeDraft();
+      saveJSON(INTAKE_PREFIX + code, found);
+    }
     if (!found) {
       setResumeError(true);
       return;
@@ -131,14 +121,14 @@ export function IntakeFlow() {
     setResumeError(false);
     setLang(found.lang);
     setDraft({ ...found, step: Math.min(found.step, STEPS.length - 1) });
-    setSent(null);
+    setSaved(null);
   };
 
   const stepId: StepId | null = draft ? STEPS[draft.step] : null;
 
   useEffect(() => {
     topRef.current?.scrollIntoView({ block: "start", behavior: "smooth" });
-  }, [draft?.step, sent]);
+  }, [draft?.step, saved]);
 
   // Preparation time of the recorded prompt: a deadline set when the step opens, a clock that ticks.
   useEffect(() => {
@@ -150,14 +140,24 @@ export function IntakeFlow() {
 
   const goToStep = useCallback(
     (step: number) => {
+      const patch: Partial<IntakeDraft> = { step };
       if (STEPS[step] === "recorded") {
         const opened = Date.now();
         setPrepDeadline(opened + promptQuestions(TEMPLATE)[0].prepSeconds * 1000);
         setNow(opened);
       }
-      update({ step });
+      setDraft((current) => {
+        if (!current) return current;
+        // The signature step shows the parent's name typed in: that typed name is the signature until it is changed or drawn over.
+        if (STEPS[step] === "signature" && !current.signature) {
+          patch.signature = { name: ((current.answers.guardian_name as string) ?? "").trim(), signedAt: new Date().toISOString(), ink: false };
+        }
+        const next = { ...current, ...patch };
+        saveJSON(INTAKE_PREFIX + next.code, next);
+        return next;
+      });
     },
-    [update],
+    [],
   );
 
   const sectionFields = (section: string) => TEMPLATE.sections.find((s) => s.id === section)?.questions?.filter((q): q is FieldQuestion => q.kind === "field") ?? [];
@@ -178,24 +178,13 @@ export function IntakeFlow() {
     return true;
   };
 
-  const submit = () => {
+  const save = () => {
     if (!draft) return;
-    const previous = loadJSON<Submission>(SUBMISSION_KEY);
-    const version = previous && previous.reference === draft.code ? previous.version + 1 : 1;
-    const now = new Date().toISOString();
-    const submission: Submission = {
-      reference: draft.code,
-      submittedAt: previous && previous.reference === draft.code ? previous.submittedAt : now,
-      language: draft.lang,
-      answers: draft.answers,
-      documents: draft.documents,
-      recordings: draft.recordings,
-      signature: draft.signature ? { name: draft.signature.name, signedAt: draft.signature.signedAt } : undefined,
-      version,
-    };
+    const nowIso = new Date().toISOString();
+    const submission: Submission = submissionFromDraft(draft, loadJSON<Submission>(SUBMISSION_KEY), nowIso);
     saveJSON(SUBMISSION_KEY, submission);
-    update({ submittedVersion: version, submittedAt: now, step: STEPS.length - 1 });
-    setSent({ reference: draft.code, version });
+    update({ submittedVersion: submission.version, submittedAt: nowIso, step: STEPS.length - 1 });
+    setSaved({ reference: draft.code, version: submission.version });
   };
 
   const setAnswer = (id: string, value: FieldValue) => draft && update({ answers: { ...draft.answers, [id]: value } });
@@ -262,7 +251,7 @@ export function IntakeFlow() {
     );
   };
 
-  if (sent && draft) {
+  if (saved && draft) {
     return (
       <IntakeShell t={t} topRef={topRef} onSwitchLang={switchLang}>
         <div className="surface mt-10 p-7 text-center">
@@ -270,7 +259,7 @@ export function IntakeFlow() {
             <Check className="size-6" />
           </div>
           <h1 className="mt-5 text-[26px] font-semibold tracking-[-0.02em] text-ink">{t.review.sentTitle}</h1>
-          <p className="mt-3 text-[15px] leading-[1.6] text-ink-2">{t.review.sentIntro(sent.reference)}</p>
+          <p className="mt-3 text-[15px] leading-[1.6] text-ink-2">{t.review.sentIntro(saved.reference)}</p>
           <Link
             href="/review"
             className="mt-7 inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-brand text-[15px] font-semibold text-white hover:bg-brand-strong"
@@ -278,7 +267,7 @@ export function IntakeFlow() {
             {t.review.openReview}
             <ArrowRight className="size-4" />
           </Link>
-          <button type="button" onClick={() => { setSent(null); setDraft(null); }} className="mt-4 text-[14px] font-medium text-ink-3 underline-offset-4 hover:underline">
+          <button type="button" onClick={() => { setSaved(null); setDraft(null); }} className="mt-4 text-[14px] font-medium text-ink-3 underline-offset-4 hover:underline">
             {t.review.startOver}
           </button>
         </div>
@@ -307,6 +296,9 @@ export function IntakeFlow() {
               <input
                 value={resumeCode}
                 onChange={(e) => setResumeCode(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") resume();
+                }}
                 placeholder={t.resumePlaceholder}
                 className="h-12 min-w-0 flex-1 rounded-xl border border-input bg-white px-3.5 text-[16px] uppercase tracking-wider outline-none placeholder:normal-case placeholder:tracking-normal focus:border-brand focus:ring-3 focus:ring-brand/20"
                 autoCapitalize="characters"
@@ -330,11 +322,8 @@ export function IntakeFlow() {
 
   return (
     <IntakeShell t={t} topRef={topRef} onSwitchLang={switchLang}>
-      <div className="mt-8 flex items-center justify-between">
+      <div className="mt-8">
         <span className="text-[12.5px] font-semibold uppercase tracking-[0.12em] text-brand-strong">{t.stepOf(stepNumber, STEPS.length)}</span>
-        <span className="text-[12.5px] text-ink-3">
-          {t.yourCode}: <span className="font-semibold text-ink-2">{draft.code}</span>
-        </span>
       </div>
       <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-line">
         <div className="h-full rounded-full bg-brand transition-all" style={{ width: `${(stepNumber / STEPS.length) * 100}%` }} />
@@ -371,8 +360,8 @@ export function IntakeFlow() {
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img src={media.file} alt="" className="h-14 w-11 rounded-md border border-line object-cover object-top" />
                       <div className="min-w-0 flex-1">
-                        <p className="truncate text-[13.5px] font-medium text-ink">{media.title}</p>
-                        <p className="text-[12px] text-ink-3">{media.pages.length} page{media.pages.length === 1 ? "" : "s"}</p>
+                        <p className="truncate text-[13.5px] font-medium text-ink">{t.media[media.id] ?? media.title}</p>
+                        <p className="text-[12px] text-ink-3">{t.pages(media.pages.length)}</p>
                       </div>
                       <button
                         type="button"
@@ -409,9 +398,7 @@ export function IntakeFlow() {
             <div className="surface-flat p-4">
               <p className="text-[16px] font-medium leading-[1.5] text-ink">{t.prompt.question}</p>
               <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[13px] text-ink-3">
-                <span>
-                  {prepLeft && prepLeft > 0 ? t.prompt.prep(prepLeft) : t.prompt.maxLength(prompt.maxSeconds)}
-                </span>
+                <span>{prepLeft && prepLeft > 0 ? t.prompt.prep(prepLeft) : t.prompt.deviceNote}</span>
                 {prepLeft && prepLeft > 0 ? (
                   <button type="button" onClick={() => setPrepDeadline(Date.now())} className="font-medium text-brand-strong underline-offset-4 hover:underline">
                     {t.prompt.skipPrep}
@@ -426,7 +413,7 @@ export function IntakeFlow() {
                   <p className="text-[15px] font-semibold text-ink">{t.prompt.sampleTitle}</p>
                   <p className="mt-1 text-[13.5px] leading-[1.55] text-ink-3">{t.prompt.sampleHelp}</p>
                 </div>
-                <span className="pill pill-brand shrink-0">sample</span>
+                <span className="pill pill-brand shrink-0">{t.prompt.sampleBadge}</span>
               </div>
               <audio controls preload="metadata" src={MEDIA[prompt.sampleMediaId].file} className="mt-4 w-full" />
               {draft.recordings[prompt.id]?.status === "received" ? (
@@ -463,7 +450,7 @@ export function IntakeFlow() {
               <input
                 type="text"
                 className={inputClass}
-                value={draft.signature?.name ?? (draft.answers.guardian_name as string) ?? ""}
+                value={draft.signature?.name ?? ""}
                 onChange={(e) => update({ signature: { name: e.target.value, signedAt: new Date().toISOString(), ink: draft.signature?.ink ?? false } })}
               />
             </label>
@@ -490,7 +477,7 @@ export function IntakeFlow() {
                     return (
                       <div key={q.id} className="flex justify-between gap-4 text-[14px]">
                         <dt className="text-ink-3">{t.fields[q.id]}</dt>
-                        <dd className="text-right font-medium text-ink">{text || " "}</dd>
+                        <dd className="text-right font-medium text-ink">{text || " "}</dd>
                       </div>
                     );
                   })}
@@ -537,7 +524,7 @@ export function IntakeFlow() {
           </button>
         )}
         {stepId === "review" ? (
-          <button type="button" onClick={submit} className="inline-flex h-12 flex-1 items-center justify-center gap-2 rounded-xl bg-brand text-[15px] font-semibold text-white hover:bg-brand-strong">
+          <button type="button" onClick={save} className="inline-flex h-12 flex-1 items-center justify-center gap-2 rounded-xl bg-brand text-[15px] font-semibold text-white hover:bg-brand-strong">
             {t.review.submit}
             <ArrowRight className="size-4" />
           </button>
@@ -553,8 +540,8 @@ export function IntakeFlow() {
           </button>
         )}
       </div>
-      <p className="mt-5 text-center text-[12.5px] text-ink-3">
-        {t.savedNote} {t.yourCodeHelp}
+      <p className="mt-5 text-center text-[12.5px] leading-[1.6] text-ink-3">
+        {t.savedNote} {t.yourCode}: <span className="font-semibold text-ink-2">{draft.code}</span>. {t.yourCodeHelp}
       </p>
     </IntakeShell>
   );
