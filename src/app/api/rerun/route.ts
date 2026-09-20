@@ -7,7 +7,7 @@
  */
 import { NextResponse } from "next/server";
 import { computeDraft, ModelAnswerUnusable, ModelNotConfigured, ProviderUnavailable } from "@/lib/ai/pipeline";
-import { inspect, LIMIT_SCOPE, takeLiveRun } from "@/lib/limits";
+import { inspect, LIMIT_SCOPE, recordProviderFailure, recordProviderSuccess, takeLiveRun } from "@/lib/limits";
 import { isKnownMedia } from "@/lib/sample";
 
 export const runtime = "nodejs";
@@ -64,25 +64,30 @@ export async function POST(request: Request) {
 
   const decision = takeLiveRun(clientId(request));
   if (!decision.allowed) {
+    const paused = decision.reason === "paused_after_errors";
     return NextResponse.json(
       {
-        error:
-          decision.reason === "instance_daily_cap"
+        error: paused
+          ? `Live runs are paused after repeated provider errors, until ${decision.pausedUntil}. ${RECORDED_STAYS}`
+          : decision.reason === "instance_daily_cap"
             ? `Today's live runs on this sample are used up. ${RECORDED_STAYS} The cap lifts at midnight UTC.`
             : `You have used your live runs for today. ${RECORDED_STAYS} The cap lifts at midnight UTC.`,
         limits: decision,
       },
-      { status: 429, headers: { "Retry-After": "3600" } },
+      { status: paused ? 503 : 429, headers: { "Retry-After": paused ? "1800" : "3600" } },
     );
   }
 
   try {
     const { draft, usage } = await computeDraft(media as string[], "live");
+    recordProviderSuccess();
     return NextResponse.json({
       draft,
       // Token counts only: the page never shows which models ran.
       usage: {
-        transcription: usage.transcription ? { inputTokens: usage.transcription.inputTokens, outputTokens: usage.transcription.outputTokens } : null,
+        transcription: usage.transcription
+          ? { inputTokens: usage.transcription.inputTokens, outputTokens: usage.transcription.outputTokens, cached: usage.transcription.cached ?? false }
+          : null,
         extraction: usage.extraction ? { inputTokens: usage.extraction.inputTokens, outputTokens: usage.extraction.outputTokens } : null,
       },
       limits: inspect(new Date(), clientId(request)),
@@ -92,6 +97,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: `Live runs are not configured on this deployment. ${RECORDED_STAYS}` }, { status: 503 });
     }
     if (error instanceof ProviderUnavailable) {
+      recordProviderFailure();
       return NextResponse.json(
         {
           error: `The ${error.provider} provider did not answer. ${RECORDED_STAYS}`,

@@ -5,6 +5,10 @@
  * transcript together), then the code verifies every quote and locates every
  * audio segment. Models come from the environment, never from a literal here.
  * Output length is bounded. The keys stay on the server.
+ *
+ * The transcript of a sample recording is kept in memory for the UTC day: a
+ * run whose extraction fails does not spend the transcription again, and the
+ * daily count taken before the first call is what bounds both providers.
  */
 import { readFile } from "node:fs/promises";
 import path from "node:path";
@@ -39,8 +43,21 @@ export class ProviderUnavailable extends Error {
 export class ModelAnswerUnusable extends Error {}
 
 export interface PipelineUsage {
-  transcription: { model: string; inputTokens: number; outputTokens: number } | null;
+  transcription: { model: string; inputTokens: number; outputTokens: number; cached?: boolean } | null;
   extraction: { model: string; inputTokens: number; outputTokens: number; cacheReadInputTokens: number } | null;
+}
+
+/** The two calls, replaceable in tests. */
+export interface PipelineCalls {
+  transcribe: typeof transcribe;
+  extract: typeof extract;
+}
+
+const transcriptCache = new Map<string, { day: string; transcript: Transcript; usage: PipelineUsage["transcription"] }>();
+
+/** Tests only. */
+export function resetTranscriptCache(): void {
+  transcriptCache.clear();
 }
 
 function anthropicModel(): string {
@@ -162,7 +179,12 @@ export async function extract(
 }
 
 /** Runs the whole thing on known sample media only. Unknown ids are refused before any call. */
-export async function computeDraft(mediaIds: string[], origin: Draft["origin"]): Promise<{ draft: Draft; usage: PipelineUsage }> {
+export async function computeDraft(
+  mediaIds: string[],
+  origin: Draft["origin"],
+  calls: Partial<PipelineCalls> = {},
+): Promise<{ draft: Draft; usage: PipelineUsage }> {
+  const { transcribe: doTranscribe = transcribe, extract: doExtract = extract } = calls;
   const ids = Array.from(new Set(mediaIds));
   for (const id of ids) {
     if (!isKnownMedia(id)) throw new Error(`Refused: "${id}" is not a sample media this page provides.`);
@@ -172,13 +194,22 @@ export async function computeDraft(mediaIds: string[], origin: Draft["origin"]):
 
   const usage: PipelineUsage = { transcription: null, extraction: null };
   const transcripts: Transcript[] = [];
+  const day = new Date().toISOString().slice(0, 10);
   for (const recording of recordings) {
-    const result = await transcribe(recording);
+    const key = `${recording.id}:${process.env.GEMINI_MODEL ?? ""}`;
+    const kept = transcriptCache.get(key);
+    if (kept && kept.day === day) {
+      transcripts.push(kept.transcript);
+      usage.transcription = kept.usage ? { ...kept.usage, cached: true } : null;
+      continue;
+    }
+    const result = await doTranscribe(recording);
+    transcriptCache.set(key, { day, transcript: result.transcript, usage: result.usage });
     transcripts.push(result.transcript);
     usage.transcription = result.usage;
   }
 
-  const { raw, usage: extractionUsage } = await extract(documents, transcripts);
+  const { raw, usage: extractionUsage } = await doExtract(documents, transcripts);
   usage.extraction = extractionUsage;
 
   const sources = {
