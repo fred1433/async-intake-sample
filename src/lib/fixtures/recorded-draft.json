@@ -1,0 +1,241 @@
+{
+  "origin": "recorded",
+  "computedAt": "2026-09-20T13:10:12.584Z",
+  "documents": [
+    {
+      "mediaId": "referral-letter",
+      "readable": true,
+      "unreadableReason": null,
+      "fields": [
+        {
+          "key": "patient_name",
+          "label": "Patient name",
+          "value": "Sam Bennett",
+          "normalized": "Sam Bennett",
+          "page": 1,
+          "quote": "Patient: Sam Bennett",
+          "uncertain": null
+        },
+        {
+          "key": "date_of_birth",
+          "label": "Date of birth",
+          "value": "March 14, 2020",
+          "normalized": "2020-03-14",
+          "page": 1,
+          "quote": "Date of birth: March 14, 2020",
+          "uncertain": null
+        },
+        {
+          "key": "guardian_name",
+          "label": "Parent or guardian",
+          "value": "Jordan Bennett",
+          "normalized": "Jordan Bennett",
+          "page": 1,
+          "quote": "Parent or guardian: Jordan Bennett",
+          "uncertain": null
+        },
+        {
+          "key": "referral_date",
+          "label": "Referral date",
+          "value": "August 28, 2026",
+          "normalized": "2026-08-28",
+          "page": 1,
+          "quote": "August 28, 2026",
+          "uncertain": null
+        },
+        {
+          "key": "referring_provider",
+          "label": "Referring provider",
+          "value": "Alice Moreno, MD",
+          "normalized": "Alice Moreno, MD",
+          "page": 1,
+          "quote": "Alice Moreno, MD",
+          "uncertain": null
+        },
+        {
+          "key": "service_requested",
+          "label": "Service requested",
+          "value": "applied behavior analysis (ABA) services",
+          "normalized": null,
+          "page": 1,
+          "quote": "Re: Referral for applied behavior analysis (ABA) services",
+          "uncertain": null
+        },
+        {
+          "key": "diagnosis_reference",
+          "label": "Diagnosis reference",
+          "value": "autism spectrum disorder (F84.0)",
+          "normalized": null,
+          "page": 1,
+          "quote": "the diagnosis listed on that evaluation is autism spectrum disorder (F84.0)",
+          "uncertain": null
+        }
+      ]
+    },
+    {
+      "mediaId": "insurance-card",
+      "readable": true,
+      "unreadableReason": null,
+      "fields": [
+        {
+          "key": "member_name",
+          "label": "Member name",
+          "value": "Jordan Bennett",
+          "normalized": "Jordan Bennett",
+          "page": 1,
+          "quote": "Member: Jordan Bennett",
+          "uncertain": null
+        },
+        {
+          "key": "member_id",
+          "label": "Member ID",
+          "value": "SHP 4471 2290",
+          "normalized": "SHP44712290",
+          "page": 1,
+          "quote": "Member ID: SHP 4471 2290",
+          "uncertain": null
+        },
+        {
+          "key": "group_number",
+          "label": "Group number",
+          "value": "88213",
+          "normalized": "88213",
+          "page": 1,
+          "quote": "Group: 88213",
+          "uncertain": null
+        },
+        {
+          "key": "plan_name",
+          "label": "Plan name",
+          "value": "Family Plus PPO",
+          "normalized": null,
+          "page": 1,
+          "quote": "Plan: Family Plus PPO",
+          "uncertain": null
+        },
+        {
+          "key": "dependent_name",
+          "label": "Dependent name",
+          "value": "Sam Bennett",
+          "normalized": "Sam Bennett",
+          "page": 1,
+          "quote": "Dependent 01: Sam Bennett",
+          "uncertain": null
+        },
+        {
+          "key": "effective_date",
+          "label": "Effective date",
+          "value": "01/01/2026",
+          "normalized": "2026-01-01",
+          "page": 1,
+          "quote": "Effective: 01/01/2026",
+          "uncertain": null
+        },
+        {
+          "key": "member_services_phone",
+          "label": "Member services phone",
+          "value": "(800) 555-0121",
+          "normalized": "8005550121",
+          "page": 2,
+          "quote": "Member services: (800) 555-0121",
+          "uncertain": null
+        }
+      ]
+    }
+  ],
+  "recordings": [
+    {
+      "mediaId": "recording-scheduling",
+      "transcript": {
+        "mediaId": "recording-scheduling",
+        "segments": [
+          {
+            "start": 0,
+            "end": 4.88,
+            "text": "Hi. So Tuesdays work best for us, anytime after three."
+          },
+          {
+            "start": 5.1,
+            "end": 8.2,
+            "text": "Not Thursdays, Sam has swimming on Thursdays."
+          },
+          {
+            "start": 8.5,
+            "end": 12.6,
+            "text": "And if it's possible, we would rather do the sessions at home."
+          }
+        ],
+        "unusable": null
+      },
+      "claims": [
+        {
+          "key": "days_that_work",
+          "label": "Days that work",
+          "statement": "The parent states that Tuesdays work best for sessions.",
+          "nature": "extraction",
+          "segment": {
+            "start": 0,
+            "end": 4.88
+          },
+          "quote": "Tuesdays work best for us, anytime after three.",
+          "days": [
+            "tuesday"
+          ],
+          "earliestHour": null,
+          "location": null,
+          "uncertain": null
+        },
+        {
+          "key": "time_window",
+          "label": "Time window",
+          "statement": "The parent states that Tuesday sessions should be anytime after 3pm.",
+          "nature": "extraction",
+          "segment": {
+            "start": 0,
+            "end": 4.88
+          },
+          "quote": "anytime after three",
+          "days": [
+            "tuesday"
+          ],
+          "earliestHour": 15,
+          "location": null,
+          "uncertain": null
+        },
+        {
+          "key": "days_that_do_not_work",
+          "label": "Days that do not work",
+          "statement": "The parent states that Thursdays do not work because Sam has swimming on Thursdays.",
+          "nature": "extraction",
+          "segment": {
+            "start": 5.1,
+            "end": 8.2
+          },
+          "quote": "Not Thursdays, Sam has swimming on Thursdays.",
+          "days": [
+            "thursday"
+          ],
+          "earliestHour": null,
+          "location": null,
+          "uncertain": null
+        },
+        {
+          "key": "location_preference",
+          "label": "Location preference",
+          "statement": "The parent states that they would rather do the sessions at home, if possible.",
+          "nature": "extraction",
+          "segment": {
+            "start": 8.5,
+            "end": 12.6
+          },
+          "quote": "if it's possible, we would rather do the sessions at home",
+          "days": [],
+          "earliestHour": null,
+          "location": "home",
+          "uncertain": "Stated as a preference contingent on possibility, not an absolute requirement."
+        }
+      ]
+    }
+  ],
+  "withheld": []
+}

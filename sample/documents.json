@@ -1,0 +1,60 @@
+{
+  "referral-letter": {
+    "id": "referral-letter",
+    "title": "Referral letter",
+    "kind": "document",
+    "file": "/sample/referral-letter.png",
+    "pages": [
+      {
+        "number": 1,
+        "blocks": [
+          { "id": "b1", "style": "letterhead", "text": "Riverside Pediatric Associates" },
+          { "id": "b2", "style": "letterhead-sub", "text": "412 Sample Avenue, Suite 3, Brooklyn, NY 11201 · (718) 555-0199 · Sample practice, fictional" },
+          { "id": "b3", "style": "date", "text": "August 28, 2026" },
+          { "id": "b4", "style": "meta", "text": "Re: Referral for applied behavior analysis (ABA) services" },
+          { "id": "b5", "style": "meta", "text": "Patient: Sam Bennett" },
+          { "id": "b6", "style": "meta", "text": "Date of birth: March 14, 2020" },
+          { "id": "b7", "style": "meta", "text": "Parent or guardian: Jordan Bennett" },
+          { "id": "b8", "style": "para", "text": "To whom it may concern," },
+          { "id": "b9", "style": "para", "text": "I am referring Sam Bennett for an evaluation for applied behavior analysis (ABA) services. A diagnostic evaluation dated June 2, 2026 is on file at our office; the diagnosis listed on that evaluation is autism spectrum disorder (F84.0). The family has asked that services be considered for the fall." },
+          { "id": "b10", "style": "para", "text": "Please contact our office if any additional information is required for your intake." },
+          { "id": "b11", "style": "para", "text": "Sincerely," },
+          { "id": "b12", "style": "signature", "text": "Alice Moreno, MD" },
+          { "id": "b13", "style": "signature-sub", "text": "Pediatrics · NPI 1234567893 (sample)" }
+        ]
+      }
+    ]
+  },
+  "insurance-card": {
+    "id": "insurance-card",
+    "title": "Insurance card (front and back)",
+    "kind": "document",
+    "file": "/sample/insurance-card.png",
+    "pages": [
+      {
+        "number": 1,
+        "label": "Front",
+        "blocks": [
+          { "id": "c1", "style": "card-brand", "text": "Sample Health Plan" },
+          { "id": "c2", "style": "card-line", "text": "Member: Jordan Bennett" },
+          { "id": "c3", "style": "card-line", "text": "Member ID: SHP 4471 2290" },
+          { "id": "c4", "style": "card-line", "text": "Group: 88213" },
+          { "id": "c5", "style": "card-line", "text": "Plan: Family Plus PPO" },
+          { "id": "c6", "style": "card-line", "text": "Dependent 01: Sam Bennett" },
+          { "id": "c7", "style": "card-line", "text": "Effective: 01/01/2026" },
+          { "id": "c8", "style": "card-small", "text": "Rx BIN 610014 · PCN SAMPLE · Fictional card for demonstration" }
+        ]
+      },
+      {
+        "number": 2,
+        "label": "Back",
+        "blocks": [
+          { "id": "c9", "style": "card-line", "text": "Member services: (800) 555-0121" },
+          { "id": "c10", "style": "card-line", "text": "Provider services: (800) 555-0122" },
+          { "id": "c11", "style": "card-line", "text": "Claims: PO Box 1000, Sample City, NY 10001" },
+          { "id": "c12", "style": "card-small", "text": "This card does not guarantee eligibility or payment. Fictional card for demonstration." }
+        ]
+      }
+    ]
+  }
+}
