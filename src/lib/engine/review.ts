@@ -1255,7 +1255,8 @@ interface ComposedRequest {
 function describeContextChange(previous: RequestDraft | undefined, next: RequestContext): string {
   if (!previous) return "";
   const parts = previous.contextParts;
-  if (!parts) return "context changed: the recipient, the child, the language, the items or the facts asked about changed";
+  // A request stored before the parts were digested apart, or with facts digested as one string, cannot name the part: the generic reason stands.
+  if (!parts || typeof parts.facts !== "object" || parts.facts === null) return "context changed: the recipient, the child, the language, the items or the facts asked about changed";
   const changed: string[] = [];
   if (parts.recipient !== next.recipient) changed.push("context changed: the recipient, the child or the language");
   if (parts.items !== next.items) changed.push("context changed: the items asked for");
