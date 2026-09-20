@@ -81,11 +81,11 @@ export function formatDay(iso: string): string {
 }
 
 export function formatSeconds(seconds: number): string {
-  const whole = Math.floor(seconds);
+  const tenths = Math.round(seconds * 10);
+  const whole = Math.floor(tenths / 10);
   const minutes = Math.floor(whole / 60);
   const rest = whole % 60;
-  const tenth = Math.floor((seconds - whole) * 10);
-  return `${minutes}:${String(rest).padStart(2, "0")}.${tenth}`;
+  return `${minutes}:${String(rest).padStart(2, "0")}.${tenths % 10}`;
 }
 
 export function Kbd({ children }: { children: React.ReactNode }) {
