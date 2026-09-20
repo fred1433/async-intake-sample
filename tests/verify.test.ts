@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { locateQuote, quoteIsOnPage, transcriptFromRaw, verifyDraft } from "../src/lib/engine/verify";
-import { HAND_TRANSCRIPT, NOW, RAW_DRAFT, source, transcript } from "./helpers";
+import { DURATION_SECONDS, HAND_TRANSCRIPT, NOW, RAW_DRAFT, source, transcript } from "./helpers";
 
 const sources = () => ({
   documents: [source("referral-letter"), source("insurance-card")],
-  recordings: [{ mediaId: "recording-scheduling", transcript: transcript() }],
+  recordings: [{ mediaId: "recording-scheduling", transcript: transcript(), durationSeconds: DURATION_SECONDS }],
 });
 
 describe("source check on document fields", () => {

@@ -27,13 +27,13 @@ export interface RecordingSlot {
 export interface Submission {
   reference: string;
   submittedAt: string;
-  /** Language the parent used, which the request draft follows. */
+  /** Language the parent used for the form. The request follows the contact language answer, then this. */
   language: Lang;
   answers: Record<string, FieldValue>;
   documents: Record<string, DocumentSlot>;
   recordings: Record<string, RecordingSlot>;
   signature?: { name: string; signedAt: string };
-  /** Increases when the parent adds something after the first submission. */
+  /** Increases when the parent sends again after the first submission. */
   version: number;
 }
 
@@ -50,21 +50,25 @@ export interface TranscriptSegment {
 export interface Transcript {
   mediaId: string;
   segments: TranscriptSegment[];
-  /** Set when the recording stops before the answer does, or holds no usable speech. */
+  /** Set when the recording stops before the answer does, or holds no usable speech. Reported by the transcription model. */
   unusable: string | null;
+  /** Segments the transcription placed outside the length of the recording, dropped by the code. */
+  outOfRange?: number;
 }
 
 export interface ExtractedField {
   key: string;
   label: string;
-  /** As written in the document. */
+  /** As written in the document. Checked to be in the quoted passage. */
   value: string;
-  /** Machine form when one exists (ISO date), otherwise null. */
+  /** Machine form when one exists (ISO date), checked against the dates written in the passage. Otherwise null. */
   normalized: string | null;
   page: number;
   /** Verbatim passage of the document. Checked against the text layer. */
   quote: string;
   uncertain: string | null;
+  /** What the code verified about this field, in words. */
+  checked: string[];
 }
 
 export interface DocumentExtraction {
@@ -81,15 +85,21 @@ export interface RecordingClaim {
   label: string;
   /** Attributed statement: "The parent states that ..." */
   statement: string;
+  /** Extraction only when the statement is the quoted words themselves; the code downgrades the rest to rephrase. */
   nature: Nature;
-  /** Located by the code from the quote, never taken from the model as is. */
+  /** Located by the code from the quoted words, inside the transcription's timestamps, checked against the recording's length. */
   segment: { start: number; end: number };
   /** Verbatim words of the transcript. */
   quote: string;
+  /** Days named in the quoted words, with the negation checked. */
   days: Day[];
+  /** An hour named in the quoted words, or null. */
   earliestHour: number | null;
+  /** A place named in the quoted words, or null. */
   location: "home" | "center" | "either" | null;
   uncertain: string | null;
+  /** What the code verified about this claim, in words, and what it leaves to the reviewer. */
+  checked: string[];
 }
 
 export interface RecordingReview {
@@ -101,7 +111,20 @@ export interface RecordingReview {
 export interface Withheld {
   mediaId: string;
   key: string;
-  reason: "no_source" | "quote_not_found" | "segment_not_found" | "unknown_media";
+  label: string;
+  page?: number;
+  reason:
+    | "no_source"
+    | "quote_not_found"
+    | "value_not_in_quote"
+    | "normalized_mismatch"
+    | "segment_not_found"
+    | "segment_out_of_range"
+    | "structured_not_in_quote"
+    | "negation_mismatch"
+    | "statement_unsupported"
+    | "clinical_content"
+    | "unknown_media";
   detail: string;
 }
 
@@ -110,7 +133,7 @@ export interface Draft {
   computedAt: string;
   documents: DocumentExtraction[];
   recordings: RecordingReview[];
-  /** What the models proposed and the code refused. Kept, shown, never applied. */
+  /** What the models proposed and the code refused. Kept, shown as not evaluable, never applied. */
   withheld: Withheld[];
 }
 
@@ -124,7 +147,9 @@ export type Finding =
   | "conflicting"
   | "to_confirm"
   | "unusable_audio"
-  | "negative";
+  | "negative"
+  | "withheld"
+  | "not_checked";
 
 export type PropositionState = "proposed" | "corrected" | "approved";
 
@@ -174,8 +199,17 @@ export interface Proposition {
   requestable?: "missing_item" | "unreadable_item" | "confirm";
   inRequest: boolean;
   approvedAt?: string;
-  /** Structured facts behind a rule-made statement, for the request text. */
+  /** Structured facts behind a rule-made statement, for the request text in either language. */
   details?: Record<string, string[]>;
+  /** What the code verified, in words, and what it leaves to the reviewer. */
+  checked?: string[];
+  /**
+   * Digest of everything the source gave this proposition: first statement,
+   * nature, finding, evidence, criterion, details. A proposition whose key
+   * changes on a new draft or a new submission is a new proposition: the
+   * reviewer's work on the old one goes to the history, not to the new one.
+   */
+  sourceKey: string;
 }
 
 export interface RequestItem {
@@ -185,22 +219,47 @@ export interface RequestItem {
   satisfiedAt?: string;
 }
 
+export interface RequestApproval {
+  text: string;
+  at: string;
+  version: number;
+  /** Set when the text changed after this approval. */
+  superseded?: { at: string; because: string };
+}
+
 export interface RequestDraft {
   language: Lang;
   items: RequestItem[];
+  /** The current text: composed by rule 1, or corrected by the reviewer. */
   text: string;
   status: "draft" | "approved";
   approvedAt?: string;
-  /** Message content at approval time, so a later change is visible. */
+  /** Message content at the last approval, so a later change is visible. */
   approvedText?: string;
+  /** Every approval this request received, with its text; a text that changed is marked superseded. */
+  approvals: RequestApproval[];
+  /** Set when the current text was corrected by the reviewer instead of composed by the rule. */
+  edited?: { at: string };
+}
+
+export interface ApprovedProposition {
+  id: string;
+  label: string;
+  statement: string;
+  state: PropositionState;
+  finding: Finding;
+  evidence: Evidence[];
+  criterion?: Criterion;
 }
 
 export interface FileApproval {
   version: number;
+  /** SHA-256 of the content approved: submission, propositions with their evidence and criteria, request. */
   hash: string;
   at: string;
   by: "reviewer";
-  snapshot: { id: string; statement: string; state: PropositionState }[];
+  snapshot: ApprovedProposition[];
+  request?: { text: string; status: RequestDraft["status"] };
   detached?: { at: string; because: string };
 }
 
@@ -209,8 +268,11 @@ export type Stage = "in_review" | "waiting_for_review" | "waiting_on_family" | "
 export type JournalAction =
   | "draft_built"
   | "draft_replaced"
+  | "submission_updated"
   | "request_prepared"
   | "request_updated"
+  | "request_edited"
+  | "request_reopened"
   | "request_approved"
   | "corrected"
   | "approved"

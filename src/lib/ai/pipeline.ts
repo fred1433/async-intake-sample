@@ -108,7 +108,7 @@ export async function transcribe(recording: SampleRecording): Promise<{ transcri
     console.error("The transcription answer could not be read.", error);
     throw new ModelAnswerUnusable("The transcription came back in a shape this page cannot read.");
   }
-  return { transcript: transcriptFromRaw(recording.id, raw), usage };
+  return { transcript: transcriptFromRaw(recording.id, raw, recording.durationSeconds), usage };
 }
 
 export async function extract(
@@ -183,7 +183,7 @@ export async function computeDraft(mediaIds: string[], origin: Draft["origin"]):
 
   const sources = {
     documents: documents.map(documentSource),
-    recordings: transcripts.map((t): RecordingSource => ({ mediaId: t.mediaId, transcript: t })),
+    recordings: transcripts.map((t): RecordingSource => ({ mediaId: t.mediaId, transcript: t, durationSeconds: recordings.find((r) => r.id === t.mediaId)?.durationSeconds ?? 0 })),
   };
   const draft = verifyDraft(raw, sources, { origin, computedAt: new Date().toISOString() });
   return { draft, usage };

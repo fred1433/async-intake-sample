@@ -13,6 +13,7 @@ import {
   replaceDraft,
 } from "../src/lib/engine/review";
 import { Refused, type ReviewState } from "../src/lib/engine/types";
+import { SAMPLE_SUBMISSION } from "../src/lib/sample";
 import { NOW, RAW_DRAFT, draft, submission } from "./helpers";
 
 const T1 = "2026-09-20T15:01:00.000Z";
@@ -48,8 +49,8 @@ describe("rule 1: a missing required item prepares a request, and sends nothing"
     expect(state.journal.find((e) => e.action === "request_prepared")?.detail).toMatch(/Not sent/);
   });
 
-  it("writes the request in Spanish when the parent used Spanish", () => {
-    const state = buildReview(submission({ language: "es" }), draft(), NOW);
+  it("writes the request in Spanish when the parent asked for Spanish messages", () => {
+    const state = buildReview(submission({ language: "es", answers: { ...SAMPLE_SUBMISSION.answers, contact_language: "es" } }), draft(), NOW);
     expect(state.request?.language).toBe("es");
     expect(state.request?.text).toContain("Hola Jordan:");
     expect(state.request?.text).toContain("Tarjeta del seguro, frente y reverso");
@@ -162,7 +163,7 @@ describe("rule 2: disagreeing sources and uncertain extractions wait for a revie
     state = addToRequest(state, "xcheck:days", T1);
     expect(state.request?.items.map((i) => i.kind)).toEqual(["missing_item", "confirm"]);
     expect(state.request?.text).toMatch(/your form lists Tuesday and Thursday, and your recorded answer says Thursday does not work/);
-    const es = addToRequest(buildReview(submission({ language: "es" }), draft(), NOW), "xcheck:days", T1);
+    const es = addToRequest(buildReview(submission({ language: "es", answers: { ...SAMPLE_SUBMISSION.answers, contact_language: "es" } }), draft(), NOW), "xcheck:days", T1);
     expect(es.request?.text).toMatch(/su formulario indica martes y jueves, y en su respuesta grabada dice que no puede los jueves/);
   });
 });

@@ -10,6 +10,9 @@ import { documentOf, pageText, SAMPLE_SUBMISSION } from "../src/lib/sample";
 
 export const NOW = "2026-09-20T15:00:00.000Z";
 
+/** Length of the sample recording, the bound every audio window is checked against. */
+export const DURATION_SECONDS = 12.6;
+
 export const HAND_TRANSCRIPT: RawTranscript = {
   segments: [
     { start: 0.0, end: 1.2, text: "Hi, so," },
@@ -29,7 +32,7 @@ export function source(id: string): DocumentSource {
 }
 
 export function transcript(raw: RawTranscript = HAND_TRANSCRIPT): Transcript {
-  return transcriptFromRaw("recording-scheduling", raw);
+  return transcriptFromRaw("recording-scheduling", raw, DURATION_SECONDS);
 }
 
 export const RAW_DRAFT: RawDraft = {
@@ -43,7 +46,7 @@ export const RAW_DRAFT: RawDraft = {
         { key: "date_of_birth", label: "Date of birth", value: "March 14, 2020", normalized: "2020-03-14", page: 1, quote: "Date of birth: March 14, 2020", uncertain: null },
         { key: "guardian_name", label: "Parent or guardian", value: "Jordan Bennett", normalized: null, page: 1, quote: "Parent or guardian: Jordan Bennett", uncertain: null },
         { key: "referral_date", label: "Referral date", value: "August 28, 2026", normalized: "2026-08-28", page: 1, quote: "August 28, 2026", uncertain: null },
-        { key: "referring_provider", label: "Referring provider", value: "Alice Moreno, MD, Pediatrics", normalized: null, page: 1, quote: "Alice Moreno, MD", uncertain: null },
+        { key: "referring_provider", label: "Referring provider", value: "Alice Moreno, MD", normalized: null, page: 1, quote: "Alice Moreno, MD", uncertain: null },
         {
           key: "service_requested",
           label: "Service requested",
@@ -56,7 +59,7 @@ export const RAW_DRAFT: RawDraft = {
         {
           key: "diagnosis_reference",
           label: "Diagnosis reference",
-          value: "Listed: autism spectrum disorder (F84.0), evaluation dated June 2, 2026",
+          value: "autism spectrum disorder (F84.0)",
           normalized: null,
           page: 1,
           quote: "A diagnostic evaluation dated June 2, 2026 is on file at our office; the diagnosis listed on that evaluation is autism spectrum disorder (F84.0).",
@@ -137,7 +140,7 @@ export function draft(raw: RawDraft = RAW_DRAFT, rawTranscript: RawTranscript = 
     raw,
     {
       documents: [source("referral-letter"), source("insurance-card")],
-      recordings: [{ mediaId: "recording-scheduling", transcript: transcript(rawTranscript) }],
+      recordings: [{ mediaId: "recording-scheduling", transcript: transcript(rawTranscript), durationSeconds: DURATION_SECONDS }],
     },
     { origin, computedAt: NOW },
   );

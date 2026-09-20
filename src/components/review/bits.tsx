@@ -10,6 +10,8 @@ const FINDING_TONE: Record<Finding, string> = {
   to_confirm: "pill-amber",
   unusable_audio: "pill-amber",
   negative: "pill-sky",
+  withheld: "pill-amber",
+  not_checked: "pill-neutral",
 };
 
 export function FindingPill({ finding, compact = false }: { finding: Finding; compact?: boolean }) {

@@ -138,9 +138,22 @@ const en = {
     missingIntroPlural: "A few items are still missing:",
     unreadableItem: (label: string) => `${label}: the copy we received is not readable. Could you send a clearer photo?`,
     missingItem: (label: string) => `${label}`,
+    recordedAnswer: "Your recorded answer",
+    unusableRecording: "Your recorded answer: we could not use the recording. Could you record your answer again?",
     confirmIntro: "We would also like to confirm one thing:",
+    confirmIntroPlural: "We would also like to confirm a few things:",
     confirmDays: (formDays: string, recordedDay: string) =>
       `your form lists ${formDays}, and your recorded answer says ${recordedDay} does not work. Which days should we plan on?`,
+    confirmDaysUnmentioned: (formDays: string, recordedDays: string) =>
+      `your form lists ${formDays}, and your recorded answer mentions ${recordedDays || "other days"}. Which days should we plan on?`,
+    confirmDaysNone: (recordedDays: string) => `your form lists no day, and your recorded answer mentions ${recordedDays || "some days"}. Which days should we plan on?`,
+    confirmTime: (formTime: string, recordedHour: string) =>
+      `your form says ${formTime}, and your recorded answer says from ${recordedHour}. Which time of day should we plan on?`,
+    confirmTimeUnknown: (formTime: string) => `your form says ${formTime}; could you confirm the time of day that works for you?`,
+    confirmLocation: (formPlace: string, recordedPlace: string) =>
+      `your form says ${formPlace}, and your recorded answer says ${recordedPlace}. Where should sessions take place?`,
+    confirmLocationUnknown: (formPlace: string) => `your form says ${formPlace}; could you confirm where sessions should take place?`,
+    confirmSchedule: "could you confirm the days and times that work for you?",
     resume: (code: string) => `You can add anything with your resume code ${code}.`,
     closing: "Thank you,",
     signature: "Sample Behavioral Health",
@@ -272,13 +285,27 @@ const es: Dict = {
   requestDraft: {
     greeting: (name: string) => `Hola ${name}:`,
     thanks: (child: string) => `Gracias por enviar la admisión de ${child}.`,
-    missingIntro: "Todavía falta un documento:",
-    missingIntroPlural: "Todavía faltan algunos documentos:",
+    missingIntro: "Todavía falta un elemento:",
+    missingIntroPlural: "Todavía faltan algunos elementos:",
     unreadableItem: (label: string) => `${label}: la copia que recibimos no se puede leer. ¿Podría enviar una foto más clara?`,
     missingItem: (label: string) => `${label}`,
+    recordedAnswer: "Su respuesta grabada",
+    unusableRecording: "Su respuesta grabada: no pudimos usar la grabación. ¿Podría grabar su respuesta de nuevo?",
     confirmIntro: "También quisiéramos confirmar algo:",
+    confirmIntroPlural: "También quisiéramos confirmar algunas cosas:",
     confirmDays: (formDays: string, recordedDay: string) =>
       `su formulario indica ${formDays.toLowerCase()}, y en su respuesta grabada dice que no puede los ${recordedDay.toLowerCase()}. ¿Con qué días debemos contar?`,
+    confirmDaysUnmentioned: (formDays: string, recordedDays: string) =>
+      `su formulario indica ${formDays.toLowerCase()}, y en su respuesta grabada menciona ${recordedDays ? `los ${recordedDays.toLowerCase()}` : "otros días"}. ¿Con qué días debemos contar?`,
+    confirmDaysNone: (recordedDays: string) =>
+      `su formulario no indica ningún día, y en su respuesta grabada menciona ${recordedDays ? `los ${recordedDays.toLowerCase()}` : "algunos días"}. ¿Con qué días debemos contar?`,
+    confirmTime: (formTime: string, recordedHour: string) =>
+      `su formulario indica ${formTime}, y en su respuesta grabada dice a partir de las ${recordedHour}. ¿En qué momento del día debemos planificar las sesiones?`,
+    confirmTimeUnknown: (formTime: string) => `su formulario indica ${formTime}; ¿podría confirmar el momento del día que le conviene?`,
+    confirmLocation: (formPlace: string, recordedPlace: string) =>
+      `su formulario indica ${formPlace}, y en su respuesta grabada dice ${recordedPlace}. ¿Dónde deberían realizarse las sesiones?`,
+    confirmLocationUnknown: (formPlace: string) => `su formulario indica ${formPlace}; ¿podría confirmar dónde deberían realizarse las sesiones?`,
+    confirmSchedule: "¿podría confirmar los días y horarios que le convienen?",
     resume: (code: string) => `Puede agregar lo que falte con su código ${code}.`,
     closing: "Gracias,",
     signature: "Sample Behavioral Health",
