@@ -244,7 +244,10 @@ describe("B. verification that must not produce false agreements", () => {
     expect(verified.withheld).toEqual([expect.objectContaining({ key: "referral_date", reason: "normalized_mismatch" })]);
   });
 
-  it("7c. \"Thursdays work\" quoting \"Not Thursdays\" is withheld: the negation is kept", () => {
+  it("7c. \"Thursdays work\" quoting \"Not Thursdays\" is kept as extracted, attributed to the extraction, never established (adapted in the fifth pass)", () => {
+    // Until the fifth pass the code read the negation and withheld this claim. Since then it reads no polarity: the claim is kept
+    // as the model extracted it, its quote ("Not Thursdays, ...") stands next to it, and the cross-check attributes it to the
+    // extraction, "as extracted", to confirm; nothing is established.
     const raw = structuredClone(RAW_DRAFT);
     raw.recordings[0].claims[0] = {
       key: "days_that_work",
@@ -258,8 +261,15 @@ describe("B. verification that must not produce false agreements", () => {
       uncertain: null,
     };
     const verified = verifyDraft(raw, sources(), { origin: "recorded", computedAt: NOW });
-    expect(verified.recordings[0].claims.some((c) => c.key === "days_that_work")).toBe(false);
-    expect(verified.withheld).toEqual([expect.objectContaining({ key: "days_that_work", reason: "negation_mismatch" })]);
+    const kept = verified.recordings[0].claims.find((c) => c.key === "days_that_work");
+    expect(kept?.days).toEqual(["thursday"]);
+    expect(kept?.quote).toBe("Not Thursdays, Sam has swimming on Thursdays.");
+    expect(verified.withheld).toEqual([]);
+    const s = submission();
+    s.answers.preferred_days = ["thursday"];
+    const cross = buildReview(s, verified, NOW).propositions.find((p) => p.id === "xcheck:days")!;
+    expect(cross.statement).toMatch(/^As extracted from the recording \("Not Thursdays, Sam has swimming on Thursdays\."\)/);
+    expect(cross.criterion?.result).not.toBe("met");
   });
 
   it("7d. a day that is not in the quoted words is withheld, and what the code did check is listed on the claim", () => {
@@ -269,7 +279,8 @@ describe("B. verification that must not produce false agreements", () => {
     expect(verified.withheld).toEqual([expect.objectContaining({ key: "days_that_work", reason: "structured_not_in_quote" })]);
     const negative = verified.recordings[0].claims.find((c) => c.key === "days_that_do_not_work")!;
     expect(negative.checked.join(" ")).toMatch(/thursday/i);
-    expect(negative.checked.join(" ")).toMatch(/negation/i);
+    // Fifth pass: the code lists the day as extracted and says it establishes nothing; it reads no negation.
+    expect(negative.checked.join(" ")).toMatch(/as extracted, not established/i);
   });
 
   it("7e. a statement labelled extraction whose words are not the quoted words is shown as a rephrase", () => {

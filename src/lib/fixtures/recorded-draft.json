@@ -247,24 +247,10 @@
           ],
           "earliestHour": null,
           "location": null,
-          "proposed": {
-            "days": [
-              "tuesday"
-            ],
-            "earliestHour": null,
-            "location": null
-          },
-          "denies": {
-            "days": [],
-            "hours": [],
-            "places": []
-          },
           "uncertain": null,
-          "unresolved": null,
           "checked": [
             "quoted words found in the recording at 0.0s to 5.0s",
-            "checked in the spoken clauses \"tuesdays work best for us / anytime after 3:00\"",
-            "tuesday named in the spoken clause, with no negation in that clause; named is not established as working",
+            "tuesday is in the quoted words; listed under days that work as extracted, not established by the code",
             "the wording is the model's, not the quoted words: judge it against the recording"
           ]
         },
@@ -281,26 +267,13 @@
           "days": [
             "tuesday"
           ],
-          "earliestHour": null,
+          "earliestHour": 15,
           "location": null,
-          "proposed": {
-            "days": [
-              "tuesday"
-            ],
-            "earliestHour": 15,
-            "location": null
-          },
-          "denies": {
-            "days": [],
-            "hours": [],
-            "places": []
-          },
           "uncertain": null,
-          "unresolved": "\"3:00\" is named without AM or PM: 15:00 is the model's reading and is not taken from the words.",
           "checked": [
             "quoted words found in the recording at 0.0s to 5.0s",
-            "checked in the spoken clauses \"tuesdays work best for us / anytime after 3:00\"",
-            "hour 15:00 not taken: \"3:00\" is named without AM or PM",
+            "tuesday is in the quoted words; listed under the time window as extracted, not established by the code",
+            "earliest hour 15:00 as extracted by the model; the code reads no hour from the words",
             "the wording is the model's, not the quoted words: judge it against the recording"
           ]
         },
@@ -319,27 +292,10 @@
           ],
           "earliestHour": null,
           "location": null,
-          "proposed": {
-            "days": [
-              "thursday"
-            ],
-            "earliestHour": null,
-            "location": null
-          },
-          "denies": {
-            "days": [
-              "thursday"
-            ],
-            "hours": [],
-            "places": []
-          },
           "uncertain": null,
-          "unresolved": null,
           "checked": [
             "quoted words found in the recording at 5.2s to 8.7s",
-            "checked in the spoken clauses \"not thursdays / sam has swimming on thursdays\"",
-            "thursday named in the spoken clause, with a negation in that clause; named is not established as working",
-            "the spoken clause explicitly negates thursday: the only ground on which the review says that two sources disagree",
+            "thursday is in the quoted words; listed under days that do not work as extracted, not established by the code",
             "the wording is the model's, not the quoted words: judge it against the recording"
           ]
         },
@@ -356,22 +312,10 @@
           "days": [],
           "earliestHour": null,
           "location": "home",
-          "proposed": {
-            "days": [],
-            "earliestHour": null,
-            "location": "home"
-          },
-          "denies": {
-            "days": [],
-            "hours": [],
-            "places": []
-          },
           "uncertain": null,
-          "unresolved": null,
           "checked": [
             "quoted words found in the recording at 8.7s to 12.6s",
-            "checked in the spoken clauses \"if it's possible / we would rather do the sessions at home\"",
-            "place \"home\" named in the spoken clause, with no negation in that clause; named is not established as preferred",
+            "place \"home\" is in the quoted words; listed as extracted, not established by the code",
             "the wording is the model's, not the quoted words: judge it against the recording"
           ]
         }

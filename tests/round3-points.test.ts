@@ -86,7 +86,7 @@ describe("the request closes on a piece from the family or a decision of the rev
     expect(() => resolveRequestItem(s, "field:referral-letter:patient_name", "", T3)).toThrow(/No such item/);
   });
 
-  it("the reopening names what changed: a corrected fact, or the recipient", () => {
+  it("the reopening names what changed: a corrected fact, or the submission (the recipient's phone is part of it since the fifth pass)", () => {
     let s = buildReview(submission(), draft(), NOW);
     s = addToRequest(s, "xcheck:days", T1);
     s = approveRequest(s, T1);
@@ -97,7 +97,7 @@ describe("the request closes on a piece from the family or a decision of the rev
     again.answers.phone = "(718) 555-0199";
     const moved = applySubmission(s, again, draft(), T2);
     expect(moved.request?.status).toBe("draft");
-    expect(moved.request?.approvals[0]?.superseded?.because).toMatch(/recipient/);
+    expect(moved.request?.approvals[0]?.superseded?.because).toMatch(/submission changed/);
     expect(moved.request?.approvals[0]?.superseded?.because).not.toMatch(/fact corrected/);
   });
 });

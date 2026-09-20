@@ -11,8 +11,12 @@
  *
  * The decision they enforce, beyond the individual fixes: the code never
  * affirms an agreement between the form and the recording. A cross-check is
- * "Sources disagree" on an explicit negation in the clause of the quoted
- * words, and "To confirm" for everything else, what seems to agree included.
+ * "Sources disagree" or "To confirm", never an agreement. The fifth pass
+ * adapted R3-B01, R3-B02, R3-R03, R3-R04, R3-R05, P02, P09 and P11, each
+ * marked where it stands: the code reads no polarity from words any more, so
+ * a claim is kept as extracted and attributed, and a disagreement comes from
+ * structured fields only; the provider's role is never met; the ids of a
+ * file the draft names wrongly carry the kind of media.
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { computeDraft, resetTranscriptCache } from "../src/lib/ai/pipeline";
@@ -228,30 +232,36 @@ describe("R3-A. a request approved for a context that is no longer the right one
 });
 
 describe("R3-B. words that are present still become agreements or criteria that are not established", () => {
-  it("R3-B01. \"We cannot do the sessions after 3 pm\" with earliestHour 15 is not in agreement with a form that says after 3 pm: the sources disagree", () => {
+  it("R3-B01. \"We cannot do the sessions after 3 pm\" with earliestHour 15 is never in agreement with a form that says after 3 pm: as extracted, to confirm, the words next to it (adapted in the fifth pass)", () => {
+    // Until the fifth pass the code read "cannot" and wrote a disagreement. It reads no polarity now: the extraction (15) is shown
+    // as extracted, next to the quote that carries "cannot", to confirm; never an agreement, never met.
     const raw = spoken("We cannot do the sessions after 3 pm.");
     const d = recordingDraft(raw, [claim({ key: "time_window", label: "Time window", quote: "We cannot do the sessions after 3 pm", earliestHour: 15 })]);
     const s = buildReview(submission(), d, NOW);
     expect(s.submission.answers.preferred_time).toBe("after_3pm");
     const cross = find(s, "xcheck:time")!;
     expect(cross).toBeDefined();
-    expect(cross.finding).toBe("conflicting");
+    expect(cross.finding).toBe("to_confirm");
+    expect(cross.statement).toMatch(/^As extracted from the recording \("We cannot do the sessions after 3 pm"\)/);
     expect(cross.criterion?.result).not.toBe("met");
     expect(cross.requestable).toBe("confirm");
     const time = s.propositions.find((p) => p.id.includes(":time_window:"));
-    expect(time?.finding ?? "absent").not.toBe("present");
+    expect(time?.criterion?.result).toBe("not_assessable");
   });
 
-  it("R3-B02. \"after 3:30 pm\" with earliestHour 15 is not 15:00: the minutes are never flattened, and nothing agrees", () => {
+  it("R3-B02. \"after 3:30 pm\" with earliestHour 15 is kept as the model's extraction, quoted with its minutes, to confirm, never met (adapted in the fifth pass)", () => {
+    // Until the fifth pass the code read the minutes and dropped the hour. It reads no hour from words now: 15 is shown as extracted
+    // next to "after 3:30 pm", for the reviewer.
     const raw = spoken("We can do sessions after 3:30 pm.");
     const d = recordingDraft(raw, [claim({ key: "time_window", label: "Time window", quote: "after 3:30 pm", earliestHour: 15 })]);
     const kept = d.recordings[0].claims.find((c) => c.key === "time_window");
-    expect(kept?.earliestHour ?? null).toBeNull();
+    expect(kept?.earliestHour).toBe(15);
     const s = buildReview(submission(), d, NOW);
     const cross = find(s, "xcheck:time");
     expect(cross?.finding ?? "absent").not.toBe("consistent");
     expect(cross?.criterion?.result ?? "absent").not.toBe("met");
     expect(cross?.finding ?? "absent").toBe("to_confirm");
+    expect(cross?.statement).toMatch(/"after 3:30 pm"/);
   });
 
   it("R3-B03. \"We cannot\" / \"do the sessions at home.\" across two segments, quoting the second, is not in agreement with a form that says home", () => {
@@ -369,7 +379,8 @@ describe("R3-R. true positives the third pass rejected, and the origin of a run 
     expect(d.withheld).toEqual([]);
     const kept = d.recordings[0].claims.find((c) => c.key === "time_window");
     expect(kept?.earliestHour).toBe(15);
-    expect(kept?.unresolved).toBeNull();
+    // Fifth pass: nothing is "unresolved" any more, the hour is as extracted; the field no longer exists.
+    expect("unresolved" in (kept ?? {})).toBe(false);
   });
 
   it("R3-R04. \"Any time after three\" / \"pm works.\" split across two segments keeps the hour 15: a segment is not a clause", () => {
@@ -378,7 +389,7 @@ describe("R3-R. true positives the third pass rejected, and the origin of a run 
     expect(d.withheld).toEqual([]);
     const kept = d.recordings[0].claims.find((c) => c.key === "time_window");
     expect(kept?.earliestHour).toBe(15);
-    expect(kept?.unresolved).toBeNull();
+    expect("unresolved" in (kept ?? {})).toBe(false);
   });
 
   it("R3-R05. \"No problem with Tuesdays\" is not a negation of Tuesday", () => {
@@ -386,8 +397,15 @@ describe("R3-R. true positives the third pass rejected, and the origin of a run 
     const works = recordingDraft(raw, [claim({ key: "days_that_work", label: "Days that work", quote: "No problem with Tuesdays", days: ["tuesday"] })]);
     expect(works.withheld).toEqual([]);
     expect(works.recordings[0].claims.find((c) => c.key === "days_that_work")?.days).toEqual(["tuesday"]);
+    // Adapted in the fifth pass: the same words extracted as Tuesday not working are no longer withheld (the code reads no
+    // polarity); they are kept as extracted, and the cross-check attributes them to the extraction, "as extracted".
     const negative = recordingDraft(raw, [claim({ key: "days_that_do_not_work", label: "Days that do not work", quote: "No problem with Tuesdays", days: ["tuesday"] })]);
-    expect(negative.withheld).toEqual([expect.objectContaining({ key: "days_that_do_not_work", reason: "negation_mismatch" })]);
+    expect(negative.withheld).toEqual([]);
+    const sub = submission();
+    sub.answers.preferred_days = ["tuesday"];
+    const cross = buildReview(sub, negative, NOW).propositions.find((p) => p.id === "xcheck:days")!;
+    expect(cross.statement).toMatch(/^As extracted from the recording \("No problem with Tuesdays"\), Tuesday is listed under days that do not work/);
+    expect(cross.criterion?.result).not.toBe("met");
   });
 
   it("R3-R06. a file with no recording ran one extraction and no transcription, and the origin line says so", async () => {
@@ -455,7 +473,8 @@ describe("P. positive controls of the third round: what already held, and must k
     raw.documents[0].mediaId = "referral-leter";
     const d = verifyDraft(raw, sourcesFor(), meta);
     const s = buildReview(submission(), d, NOW);
-    const listed = find(s, "withheld:referral-leter:*")!;
+    // Fifth pass: the id of a file the draft names wrongly carries the kind of media (R4-D01).
+    const listed = find(s, "withheld:document:referral-leter:*")!;
     expect(listed).toBeDefined();
     expect(listed.group).toBe("documents");
     expect(listed.evidence).toEqual([]);
@@ -532,8 +551,9 @@ describe("P. positive controls of the third round: what already held, and must k
     expect(find(s, "xcheck:days")?.finding).toBe("conflicting");
     expect(find(s, "xcheck:time")?.finding).toBe("to_confirm");
     expect(find(s, "xcheck:location")).toBeDefined();
-    // The provider on the letter carries its credential on the line: that criterion holds.
-    expect(find(s, "field:referral-letter:referring_provider")?.criterion?.result).toBe("met");
+    // Since the fifth pass a credential proves no role: the provider is present as quoted, the role to confirm by the reviewer.
+    expect(find(s, "field:referral-letter:referring_provider")?.criterion?.result).toBe("not_assessable");
+    expect(find(s, "field:referral-letter:referring_provider")?.finding).toBe("present");
     expect(s.stage).toBe("waiting_for_review");
   });
 
@@ -545,15 +565,17 @@ describe("P. positive controls of the third round: what already held, and must k
     expect(s.request?.items.some((i) => !i.satisfiedAt)).toBe(true);
   });
 
-  it("P11. in the recorded review, \"3:00\" without AM or PM gives no hour to compare, and the time cross-check is to confirm", () => {
+  it("P11. in the recorded review, the extracted hour is shown as extracted, next to \"anytime after 3:00\", and the time cross-check is to confirm (adapted in the fifth pass)", () => {
+    // Until the fifth pass the code read that the words gave no AM or PM. It reads no words now: 15 is the model's extraction, shown
+    // as such with its quote; the cross-check with the form (after 3 pm) is to confirm, never met.
     const s = buildReview(SAMPLE_SUBMISSION, RECORDED_DRAFT, NOW);
     const time = s.propositions.find((p) => p.id.includes(":time_window:"))!;
-    expect(time.finding).toBe("to_confirm");
-    expect(RECORDED_DRAFT.recordings[0].claims.find((c) => c.key === "time_window")?.earliestHour ?? null).toBeNull();
+    expect(time.criterion?.result).toBe("not_assessable");
+    expect(RECORDED_DRAFT.recordings[0].claims.find((c) => c.key === "time_window")?.earliestHour).toBe(15);
     const cross = find(s, "xcheck:time")!;
     expect(cross.finding).toBe("to_confirm");
     expect(cross.criterion?.result).not.toBe("met");
-    expect(cross.statement).toMatch(/To confirm/);
+    expect(cross.statement).toMatch(/^As extracted from the recording \("Tuesdays work best for us, anytime after 3:00\."\), the earliest hour is 3:00 pm\. The form says after 3 pm\. To confirm\.$/);
   });
 
   it("P12. Casey and Alex: a corrected, approved message is a draft again for the new recipient and the new child", () => {

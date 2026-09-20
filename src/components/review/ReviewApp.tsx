@@ -24,9 +24,10 @@ import {
   STAGE_LABELS,
 } from "@/lib/engine/review";
 import { Refused, type Draft, type ReviewState } from "@/lib/engine/types";
-import { draftOriginLabel } from "@/lib/draft-origin";
+import { draftOriginLabel, liveRunNotice, runAgainTitle } from "@/lib/draft-origin";
 import { dict } from "@/lib/i18n";
-import { isSampleSubmission, loadReview, persistReview, resetToSample } from "@/lib/review-store";
+import { isSampleSubmission, loadReview, mediaForLiveRun, persistReview, resetToSample } from "@/lib/review-store";
+import { mediaOf } from "@/lib/sample";
 import { formatWhen, Kbd } from "./bits";
 import { HelpDialog, JournalPanel, RequestDialog } from "./Panels";
 import { PropositionDetail } from "./PropositionDetail";
@@ -160,13 +161,19 @@ export function ReviewApp() {
       const next = approveRequest(state);
       commit(next);
       setShowRequest(false);
-      // The next thing worth a look: the conflict between the form and the recording, with its segment.
+      // The next thing worth a look: the days cross-check, with its segment cued; the guidance says what the code found, not more.
       const conflict = next.propositions.find((p) => p.id === "xcheck:days" && p.state === "proposed" && (p.finding === "conflicting" || p.finding === "to_confirm"));
       if (conflict) {
         const audio = conflict.evidence.findIndex((e) => e.kind === "audio");
         setSelectedId(conflict.id, audio === -1 ? 0 : audio);
         setMobileDetail(true);
-        setToast({ text: "Request approved, not sent. Next: the days the form and the recording disagree on, with the segment already cued. Nothing else is approved.", tone: "ok" });
+        setToast({
+          text:
+            conflict.finding === "conflicting"
+              ? "Request approved, not sent. Next: the days where the form and the extraction disagree, as extracted, with the segment already cued. Nothing else is approved."
+              : "Request approved, not sent. Next: the days to confirm against the recording, with the segment already cued. Nothing else is approved.",
+          tone: "ok",
+        });
       } else {
         setToast({ text: "Request approved. Not sent: this sample sends nothing.", tone: "ok" });
       }
@@ -247,11 +254,9 @@ export function ReviewApp() {
         return;
       }
       commit(result.state);
-      const reused = payload.draft.transcriptReused || payload.usage?.transcription?.cached;
-      setToast({
-        text: `Live draft computed at ${formatWhen(payload.draft.computedAt)}${reused ? " (extraction called; transcription reused from an earlier run today)" : " (transcription and extraction both called)"}: ${result.state.propositions.length} propositions, ${payload.draft.withheld.length} withheld by the source check${payload.draft.withheld.length > 0 ? ", listed as not evaluable" : ""}.`,
-        tone: "ok",
-      });
+      // The notice says what really ran: one call, two calls, or one call with the transcription reused.
+      const reused = Boolean(payload.draft.transcriptReused || payload.usage?.transcription?.cached);
+      setToast({ text: liveRunNotice({ ...payload.draft, ...(reused ? { transcriptReused: true } : {}) }, result.state.propositions.length), tone: "ok" });
     } catch {
       setToast({ text: "The live run did not come back. The recorded review stays available.", tone: "warn" });
     } finally {
@@ -325,6 +330,7 @@ export function ReviewApp() {
   const childName = `${state.submission.answers.child_last_name ?? ""}, ${state.submission.answers.child_first_name ?? ""}`.replace(/^, |, $/g, "");
   const openRequestItems = state.request?.items.filter((i) => !i.satisfiedAt).length ?? 0;
   const evidence = selected?.evidence[activeEvidence] ?? selected?.evidence[0] ?? null;
+  const hasRecording = mediaForLiveRun(state.submission).some((id) => mediaOf(id).kind === "recording");
 
   return (
     <div className="flex min-h-full flex-col bg-paper">
@@ -352,7 +358,7 @@ export function ReviewApp() {
               onClick={() => void runAgain()}
               disabled={running}
               className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-line bg-white px-2.5 text-[12.5px] font-semibold text-ink hover:bg-muted disabled:opacity-60"
-              title="Run the two model calls again on the sample media"
+              title={runAgainTitle(hasRecording)}
             >
               <RefreshCw className={`size-3.5 ${running ? "animate-spin" : ""}`} />
               {running ? "Running…" : "Run again"}

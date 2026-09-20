@@ -86,9 +86,11 @@ describe("rule 2: disagreeing sources and uncertain extractions wait for a revie
     const state = buildReview(submission(), draft(), NOW);
     const days = state.propositions.find((p) => p.id === "xcheck:days")!;
     expect(days.finding).toBe("conflicting");
-    expect(days.statement).toMatch(/No day has been chosen/);
-    expect(days.statement).toMatch(/Tuesday and Thursday/);
-    expect(days.statement).toMatch(/Thursday does not work/);
+    // Fifth pass: the statement is attributed to the extraction and compares structured fields; it establishes nothing.
+    expect(days.statement).toMatch(/^As extracted from the recording/);
+    expect(days.statement).toMatch(/The form lists Tuesday and Thursday/);
+    expect(days.statement).toMatch(/Thursday is listed under days that do not work/);
+    expect(days.statement).toMatch(/To confirm which days/);
     expect(days.criterion?.result).toBe("not_met");
     expect(days.evidence.map((e) => e.kind)).toEqual(["form", "audio", "audio"]);
     expect(state.stage).toBe("waiting_for_review");
@@ -103,8 +105,8 @@ describe("rule 2: disagreeing sources and uncertain extractions wait for a revie
     expect(days.finding).toBe("to_confirm");
     expect(days.statement).not.toMatch(/agree/);
     expect(days.statement).toMatch(/Tuesday/);
-    // "any time after three": the hour is named without AM or PM, so the time window waits for the reviewer; every cross-check does.
-    expect(openConflicts(state).map((p) => p.id)).toEqual([expect.stringContaining(":time_window:"), "xcheck:days", "xcheck:time", "xcheck:location"]);
+    // Fifth pass: the hour is the model's extraction, shown as extracted (the code reads no AM or PM); every cross-check waits for the reviewer.
+    expect(openConflicts(state).map((p) => p.id)).toEqual(["xcheck:days", "xcheck:time", "xcheck:location"]);
     expect(state.stage).toBe("waiting_for_review");
     let done = state;
     for (const p of openConflicts(state)) done = correct(done, p.id, `${p.statement} Checked by phone: from 3 pm.`, T1);
@@ -171,9 +173,10 @@ describe("rule 2: disagreeing sources and uncertain extractions wait for a revie
     let state = buildReview(submission(), draft(), NOW);
     state = addToRequest(state, "xcheck:days", T1);
     expect(state.request?.items.map((i) => i.kind)).toEqual(["missing_item", "confirm"]);
-    expect(state.request?.text).toMatch(/your form lists Tuesday and Thursday, and your recorded answer says Thursday does not work/);
+    // Fifth pass: the question cites the recorded answer "as we read it" and is a question.
+    expect(state.request?.text).toMatch(/your form lists Tuesday and Thursday; your recorded answer, as we read it, mentions Tuesday and says Thursday does not work: which days should we plan on\?/);
     const es = addToRequest(buildReview(submission({ language: "es", answers: { ...SAMPLE_SUBMISSION.answers, contact_language: "es" } }), draft(), NOW), "xcheck:days", T1);
-    expect(es.request?.text).toMatch(/su formulario indica martes y jueves, y en su respuesta grabada dice que no puede los jueves/);
+    expect(es.request?.text).toMatch(/su formulario indica martes y jueves; en su respuesta grabada, tal como la leímos, menciona los martes y dice que no puede los jueves: ¿con qué días debemos contar\?/);
   });
 });
 

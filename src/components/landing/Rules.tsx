@@ -12,7 +12,7 @@ const RULES = [
     icon: GitCompareArrows,
     title: "Two sources disagree",
     body: "The file waits for a reviewer. Nothing is chosen for the family.",
-    example: "Form says Thursday. Recording says not Thursdays.",
+    example: "Form: Thursday. Extracted from the recording: not Thursdays.",
     tone: "pill-rose",
   },
   {

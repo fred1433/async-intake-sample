@@ -72,7 +72,7 @@ describe("C. words the functions keep", () => {
   });
 
   it("15. no active instruction the sample does not enforce: the prompt says what the device check is", () => {
-    const flat = JSON.stringify(DICTIONARIES, (_k, v) => (typeof v === "function" ? v("60", "60") : v));
+    const flat = JSON.stringify(DICTIONARIES, (_k, v) => (typeof v === "function" ? v("60", "60", "60") : v));
     expect(flat).not.toMatch(/One retake allowed|Se permite una repetici/);
     expect(flat).not.toMatch(/Up to 60 seconds|Hasta 60 segundos/);
     expect(DICTIONARIES.en.prompt.deviceNote).toBe("Optional 10-second camera and microphone check. Nothing is uploaded.");
@@ -130,30 +130,36 @@ describe("D. Spanish the engine composes", () => {
     s.answers.location = "center";
     s.answers.preferred_days = ["tuesday"];
     let state = buildReview(s, draft(RAW_DRAFT, spokenWithPm), NOW);
-    // Since the fourth pass a difference without an explicit negation is to confirm, never a computed disagreement; the question still names both.
-    expect(state.propositions.find((p) => p.id === "xcheck:time")?.finding).toBe("to_confirm");
-    expect(state.propositions.find((p) => p.id === "xcheck:location")?.finding).toBe("to_confirm");
+    // Since the fifth pass the code compares structured fields: an extracted earliest hour past the end of the form's window, and a
+    // place that is the other one, are "Sources disagree (as extracted)"; the question is composed as a question and cites the
+    // recorded answer "as we read it" (adapted here from "to_confirm", the fourth pass's reading).
+    expect(state.propositions.find((p) => p.id === "xcheck:time")?.finding).toBe("conflicting");
+    expect(state.propositions.find((p) => p.id === "xcheck:location")?.finding).toBe("conflicting");
     state = addToRequest(state, "xcheck:time", NOW);
     state = addToRequest(state, "xcheck:location", NOW);
     const text = state.request!.text;
     expect(text).not.toMatch(/The form|recorded answer|To confirm/);
-    expect(text).toMatch(/su formulario indica por la mañana, y en su respuesta grabada dice a partir de las 15:00/);
-    expect(text).toMatch(/su formulario indica en el centro, y en su respuesta grabada dice en casa/);
+    expect(text).toMatch(/su formulario indica por la mañana; en su respuesta grabada, tal como la leímos, dice a partir de las 15:00: ¿en qué momento del día debemos planificar las sesiones\?/);
+    expect(text).toMatch(/su formulario indica en el centro; en su respuesta grabada, tal como la leímos, dice en casa: ¿dónde deberían realizarse las sesiones\?/);
     expect(text).toMatch(/También quisiéramos confirmar algunas cosas:/);
   });
 
-  it("20c. an hour said without AM or PM is asked as a question, not attributed as 15:00, in both languages", () => {
+  it("20c. an hour the model extracted is asked back as a question, attributed to our reading, in both languages; an hour equal to the form's is not quoted back", () => {
+    // Adapted in the fifth pass: the code no longer reads whether the words gave AM or PM. The extracted hour (15) is the model's
+    // reading; the question says so ("as we read it", "tal como la leímos") and is a question, never a fact about the parent.
     const s = spanish();
     s.answers.preferred_time = "morning";
     s.answers.preferred_days = ["tuesday"];
     let state = buildReview(s, draft(), NOW);
-    expect(state.propositions.find((p) => p.id === "xcheck:time")?.finding).toBe("to_confirm");
+    expect(state.propositions.find((p) => p.id === "xcheck:time")?.finding).toBe("conflicting");
     state = addToRequest(state, "xcheck:time", NOW);
-    expect(state.request!.text).toMatch(/su formulario indica por la mañana; ¿podría confirmar el momento del día que le conviene\?/);
-    expect(state.request!.text).not.toMatch(/15:00|a partir de/);
+    expect(state.request!.text).toMatch(/su formulario indica por la mañana; en su respuesta grabada, tal como la leímos, dice a partir de las 15:00: ¿en qué momento del día debemos planificar las sesiones\?/);
     const en = addToRequest(buildReview({ ...submission(), answers: { ...submission().answers, preferred_time: "morning", preferred_days: ["tuesday"] } }, draft(), NOW), "xcheck:time", NOW);
-    expect(en.request!.text).toMatch(/your form says in the morning; could you confirm the time of day that works for you\?/);
-    expect(en.request!.text).not.toMatch(/3:00 pm|from 3/);
+    expect(en.request!.text).toMatch(/your form says in the morning; your recorded answer, as we read it, says from 3:00 pm: which time of day should we plan on\?/);
+    // The form says after 3 pm and the extraction says 3:00 pm: the question is simply asked, nothing is quoted back as a fact.
+    const same = addToRequest(buildReview({ ...submission(), answers: { ...submission().answers, preferred_days: ["tuesday"] } }, draft(), NOW), "xcheck:time", NOW);
+    expect(same.request!.text).toMatch(/your form says after 3 pm; could you confirm the time of day that works for you\?/);
+    expect(same.request!.text).not.toMatch(/3:00 pm|from 3/);
   });
 
   it("20b. a form day the recording does not mention is asked in Spanish too", () => {
@@ -161,7 +167,8 @@ describe("D. Spanish the engine composes", () => {
     s.answers.preferred_days = ["monday"];
     let state = buildReview(s, draft(), NOW);
     state = addToRequest(state, "xcheck:days", NOW);
-    expect(state.request!.text).toMatch(/su formulario indica lunes, y en su respuesta grabada menciona los martes/);
+    // Fifth pass: the question cites both extracted lists, as we read them, and is a question.
+    expect(state.request!.text).toMatch(/su formulario indica lunes; en su respuesta grabada, tal como la leímos, menciona los martes y dice que no puede los jueves: ¿con qué días debemos contar\?/);
     expect(state.request!.text).not.toMatch(/The form|Monday/);
   });
 

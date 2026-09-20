@@ -164,7 +164,9 @@ function RequestBody({
       {request ? (
         <>
           <div className="flex flex-wrap items-center gap-2">
-            {request.status === "approved" ? (
+            {pending.length === 0 ? (
+              <span className="pill pill-neutral">Nothing left to ask · not sent</span>
+            ) : request.status === "approved" ? (
               <span className="pill pill-green">Approved {request.approvedAt ? `at ${formatWhen(request.approvedAt)}` : ""} · not sent</span>
             ) : (
               <span className="pill pill-amber">Draft · not sent</span>
@@ -175,8 +177,8 @@ function RequestBody({
             </span>
           </div>
           <ul className="space-y-1 text-[13px] text-ink-2">
-            {request.items.map((item) => (
-              <li key={item.propositionId} className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            {request.items.map((item, index) => (
+              <li key={`${item.propositionId}-${index}`} className="flex flex-wrap items-center gap-x-2 gap-y-1">
                 {item.satisfiedAt ? <Check className="size-3.5 text-green-ink" /> : <Send className="size-3.5 text-ink-3" />}
                 <span className={item.satisfiedAt ? "line-through text-ink-3" : ""}>{itemLabel(item.propositionId)}</span>
                 {item.satisfiedAt && (
@@ -187,6 +189,11 @@ function RequestBody({
                 {!item.satisfiedAt && item.basisMissing && (
                   <span className="pill pill-amber" title={`Since ${formatWhen(item.basisMissing.at)}`}>
                     {item.basisMissing.because}
+                  </span>
+                )}
+                {!item.satisfiedAt && item.reopened && (
+                  <span className="pill pill-neutral" title={`Since ${formatWhen(item.reopened.at)}`}>
+                    asked again: {item.reopened.because}
                   </span>
                 )}
                 {!item.satisfiedAt && (
