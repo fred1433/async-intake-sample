@@ -24,9 +24,8 @@ export function Hero() {
             Draft request ready for review.
           </h1>
           <p className="mt-8 max-w-xl text-[17px] leading-[1.65] text-ink-2 md:text-[19px]">
-            A parent finished the intake on a phone. The AI drafted the file one claim at a time, each with its source, and the
-            code checked every claim against it. The reviewer checks the source, corrects what needs it, and approves. Nothing is
-            sent or finalized before that, and an approval ends the moment its content changes.
+            A parent finished the intake on a phone. The AI drafted the file one claim at a time, each with its source, checked by
+            the code. The reviewer checks the source, corrects what needs it, and approves. Nothing is sent before that.
           </p>
           <div className="mt-10 flex flex-wrap items-center gap-3">
             <Link

@@ -8,17 +8,16 @@ const COLUMNS = (recorded: string) => [
   {
     title: "What runs for real",
     lines: [
-      "Transcription of the sample recording by a Google model, and extraction from the sample documents and the transcript by an Anthropic model, on request.",
-      "Every quote is checked against the document text, every value against its quote, every date against the passage. Every audio segment is located from the quoted words within the timestamps the transcription returned, and checked against the length of the recording. Days, hours, places and negations are checked in the quoted words. What fails is listed as not evaluable, never shown as a fact.",
-      "The wording of a rephrased statement is the model's: the reviewer judges it against the recording. Whether a recording was cut off is what the transcription reports; the code does not detect that on its own.",
-      `The review shown first was recorded on ${recorded}. The button in the reviewer view runs it again, under a daily cap. When the cap is reached, the recorded review stays available and says it is recorded.`,
+      "Transcription (a Google model) and extraction (an Anthropic model), on request, on the sample media only.",
+      "Every quote is checked against the document text; every value, date, day, hour, place and negation against the quoted words; every audio segment is located from those words and checked against the recording's length. What fails is listed as not evaluable, never as a fact.",
+      `The review shown first was recorded on ${recorded}. It can be run again under a daily cap; past the cap, the recorded review stays and says so.`,
     ],
   },
   {
     title: "What stays on your device",
     lines: [
-      "The camera and microphone check in the intake flow records on your device and sends nothing.",
-      "Form progress and the reviewer's actions are kept on your device, not on a server. Saving the form sends nothing.",
+      "The camera and microphone check records on your device and sends nothing.",
+      "Form progress and the reviewer's actions stay on your device, not on a server. Saving the form sends nothing.",
     ],
   },
   {
@@ -49,7 +48,7 @@ export function About() {
             What is real here, and what is not.
           </h2>
         </div>
-        <div className="mt-12 grid gap-x-12 gap-y-10 md:grid-cols-2">
+        <div className="mt-10 grid gap-x-12 gap-y-8 md:grid-cols-2">
           {columns.map((column) => (
             <div key={column.title}>
               <h3 className="text-[15px] font-semibold uppercase tracking-[0.08em] text-brand-strong">{column.title}</h3>
@@ -64,7 +63,7 @@ export function About() {
             </div>
           ))}
         </div>
-        <p className="mt-16 max-w-2xl text-[17px] leading-[1.6] text-ink">
+        <p className="mt-12 max-w-2xl text-[17px] leading-[1.6] text-ink">
           This sample demonstrates one workflow. Your existing prototypes would inform the production scope.
         </p>
       </div>
