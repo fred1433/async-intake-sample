@@ -325,3 +325,25 @@ describe("an open disagreement cannot simply be approved", () => {
     expect(state.stage).toBe("in_review");
   });
 });
+
+describe("propositions that appear later carry the file version of their arrival", () => {
+  it("stamps a re-run's new proposition with the new version", () => {
+    let state = buildReview(submission(), draft(), NOW);
+    const raw = structuredClone(RAW_DRAFT);
+    raw.recordings[0].claims.push({
+      key: "other",
+      label: "Other scheduling note",
+      statement: "The parent states that Sam has swimming on Thursdays.",
+      nature: "extraction",
+      quote: "Sam has swimming on Thursdays",
+      days: [],
+      earliestHour: null,
+      location: null,
+      uncertain: null,
+    });
+    state = replaceDraft(state, draft(raw, undefined, "live"), T1);
+    const other = state.propositions.find((p) => p.label === "Other scheduling note")!;
+    expect(other.history[0].version).toBe(state.version);
+    expect(state.version).toBe(2);
+  });
+});

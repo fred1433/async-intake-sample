@@ -148,7 +148,7 @@ function contentHash(submission: Submission, draft: Draft, propositions: Proposi
 
 /* ---------- Building propositions from a submission and a draft ---------- */
 
-function documentPropositions(submission: Submission, draft: Draft, now: string): Proposition[] {
+function documentPropositions(submission: Submission, draft: Draft, now: string, version: number): Proposition[] {
   const out: Proposition[] = [];
   for (const item of documentItems(TEMPLATE)) {
     const label = DOCUMENT_LABELS[item.id] ?? item.id;
@@ -169,7 +169,7 @@ function documentPropositions(submission: Submission, draft: Draft, now: string)
         statement: item.required ? "Not received. Required for the file." : "Not received. Optional.",
         evidence: [{ kind: "form", questionId: `documents.${item.id}`, value: "Not attached" }],
         finding: "missing",
-        history: [{ statement: "Not received.", by: "rule", at: now, version: 1 }],
+        history: [{ statement: "Not received.", by: "rule", at: now, version }],
         requestable: item.required ? "missing_item" : undefined,
         inRequest: item.required,
       });
@@ -183,7 +183,7 @@ function documentPropositions(submission: Submission, draft: Draft, now: string)
         statement,
         evidence: [{ kind: "document", mediaId: slot.mediaId, page: 1, quote: "" }],
         finding: "unreadable",
-        history: [{ statement, by: "ai", at: now, version: 1 }],
+        history: [{ statement, by: "ai", at: now, version }],
         requestable: "unreadable_item",
         inRequest: true,
       });
@@ -198,7 +198,7 @@ function documentPropositions(submission: Submission, draft: Draft, now: string)
       statement,
       evidence: [{ kind: "document", mediaId: slot.mediaId, page: 1, quote: "" }],
       finding: "present",
-      history: [{ statement, by: extraction ? "ai" : "rule", at: now, version: 1 }],
+      history: [{ statement, by: extraction ? "ai" : "rule", at: now, version }],
     });
   }
   return out;
@@ -330,7 +330,7 @@ function fieldCriterion(
   }
 }
 
-function extractionPropositions(submission: Submission, draft: Draft, now: string): Proposition[] {
+function extractionPropositions(submission: Submission, draft: Draft, now: string, version: number): Proposition[] {
   const out: Proposition[] = [];
   for (const item of documentItems(TEMPLATE)) {
     const slot = submission.documents[item.id];
@@ -352,7 +352,7 @@ function extractionPropositions(submission: Submission, draft: Draft, now: strin
         finding,
         criterion: field.uncertain && criterion ? { ...criterion, note: [criterion.note, `Uncertain: ${field.uncertain}`].filter(Boolean).join(" ") } : criterion,
         state: "proposed",
-        history: [{ statement: field.value, by: "ai", at: now, version: 1 }],
+        history: [{ statement: field.value, by: "ai", at: now, version }],
         dependsOn: [],
         inRequest: false,
       });
@@ -372,7 +372,7 @@ function extractionPropositions(submission: Submission, draft: Draft, now: strin
             result: "not_assessable",
           },
           state: "proposed",
-          history: [{ statement: "Not assessable from the document.", by: "rule", at: now, version: 1 }],
+          history: [{ statement: "Not assessable from the document.", by: "rule", at: now, version }],
           dependsOn: [id],
           inRequest: false,
         });
@@ -382,7 +382,7 @@ function extractionPropositions(submission: Submission, draft: Draft, now: strin
   return out;
 }
 
-function recordingPropositions(submission: Submission, draft: Draft, now: string): Proposition[] {
+function recordingPropositions(submission: Submission, draft: Draft, now: string, version: number): Proposition[] {
   const out: Proposition[] = [];
   for (const prompt of promptQuestions(TEMPLATE)) {
     const label = PROMPT_LABELS[prompt.id] ?? prompt.id;
@@ -397,7 +397,7 @@ function recordingPropositions(submission: Submission, draft: Draft, now: string
         evidence: [{ kind: "form", questionId: `recordings.${prompt.id}`, value: "Not attached" }],
         finding: "missing",
         state: "proposed",
-        history: [{ statement: "No recorded answer was received.", by: "rule", at: now, version: 1 }],
+        history: [{ statement: "No recorded answer was received.", by: "rule", at: now, version }],
         dependsOn: [],
         requestable: "missing_item",
         inRequest: true,
@@ -417,7 +417,7 @@ function recordingPropositions(submission: Submission, draft: Draft, now: string
         evidence: [{ kind: "audio", mediaId: slot.mediaId, start: 0, end: slot.durationSeconds ?? 0, quote: "" }],
         finding: "unusable_audio",
         state: "proposed",
-        history: [{ statement, by: "ai", at: now, version: 1 }],
+        history: [{ statement, by: "ai", at: now, version }],
         dependsOn: [],
         requestable: "unreadable_item",
         inRequest: true,
@@ -447,7 +447,7 @@ function recordingPropositions(submission: Submission, draft: Draft, now: string
         finding,
         criterion,
         state: "proposed",
-        history: [{ statement: claim.statement, by: "ai", at: now, version: 1 }],
+        history: [{ statement: claim.statement, by: "ai", at: now, version }],
         dependsOn: [],
         inRequest: false,
       });
@@ -456,7 +456,7 @@ function recordingPropositions(submission: Submission, draft: Draft, now: string
   return out;
 }
 
-function crossCheckPropositions(submission: Submission, draft: Draft, recordingProps: Proposition[], now: string): Proposition[] {
+function crossCheckPropositions(submission: Submission, draft: Draft, recordingProps: Proposition[], now: string, version: number): Proposition[] {
   const out: Proposition[] = [];
   const prompt = promptQuestions(TEMPLATE)[0];
   const slot = prompt ? submission.recordings[prompt.id] : undefined;
@@ -495,7 +495,7 @@ function crossCheckPropositions(submission: Submission, draft: Draft, recordingP
           note: `${dayList(contradicted)} appears in both.`,
         },
         state: "proposed",
-        history: [{ statement, by: "rule", at: now, version: 1 }],
+        history: [{ statement, by: "rule", at: now, version }],
         dependsOn,
         requestable: "confirm",
         inRequest: false,
@@ -519,7 +519,7 @@ function crossCheckPropositions(submission: Submission, draft: Draft, recordingP
           result: "met",
         },
         state: "proposed",
-        history: [{ statement, by: "rule", at: now, version: 1 }],
+        history: [{ statement, by: "rule", at: now, version }],
         dependsOn,
         inRequest: false,
       });
@@ -555,7 +555,7 @@ function crossCheckPropositions(submission: Submission, draft: Draft, recordingP
         result: unknown ? "not_assessable" : agree ? "met" : "not_met",
       },
       state: "proposed",
-      history: [{ statement, by: "rule", at: now, version: 1 }],
+      history: [{ statement, by: "rule", at: now, version }],
       dependsOn: [claimProp("time_window")?.id].filter((x): x is string => !!x),
       requestable: unknown || agree ? undefined : "confirm",
       inRequest: false,
@@ -590,7 +590,7 @@ function crossCheckPropositions(submission: Submission, draft: Draft, recordingP
         result: compatible ? "met" : "not_met",
       },
       state: "proposed",
-      history: [{ statement, by: "rule", at: now, version: 1 }],
+      history: [{ statement, by: "rule", at: now, version }],
       dependsOn: [claimProp("location_preference")?.id].filter((x): x is string => !!x),
       requestable: compatible ? undefined : "confirm",
       inRequest: false,
@@ -599,11 +599,11 @@ function crossCheckPropositions(submission: Submission, draft: Draft, recordingP
   return out;
 }
 
-export function buildPropositions(submission: Submission, draft: Draft, now: string): Proposition[] {
-  const docs = documentPropositions(submission, draft, now);
-  const fields = extractionPropositions(submission, draft, now);
-  const recording = recordingPropositions(submission, draft, now);
-  const cross = crossCheckPropositions(submission, draft, recording, now);
+export function buildPropositions(submission: Submission, draft: Draft, now: string, version = 1): Proposition[] {
+  const docs = documentPropositions(submission, draft, now, version);
+  const fields = extractionPropositions(submission, draft, now, version);
+  const recording = recordingPropositions(submission, draft, now, version);
+  const cross = crossCheckPropositions(submission, draft, recording, now, version);
   return [...docs, ...fields, ...recording, ...cross];
 }
 
@@ -982,7 +982,7 @@ export function receiveDocument(
     : state.draft;
   const version = state.version + 1;
   const label = DOCUMENT_LABELS[itemId] ?? itemId;
-  const fresh = buildPropositions(submission, draft, now);
+  const fresh = buildPropositions(submission, draft, now, version);
   const propositions = merge(state.propositions, fresh, now, `${label} was received`);
   let next: ReviewState = { ...state, submission, draft, propositions, version };
   const previous = state.request
@@ -1005,7 +1005,7 @@ export function receiveDocument(
 
 export function replaceDraft(state: ReviewState, draft: Draft, now: string = new Date().toISOString()): ReviewState {
   const version = state.version + 1;
-  const fresh = buildPropositions(state.submission, draft, now);
+  const fresh = buildPropositions(state.submission, draft, now, version);
   const propositions = merge(state.propositions, fresh, now, "the draft was computed again");
   let next: ReviewState = { ...state, draft, propositions, version };
   next = { ...next, request: prepareRequest(next.submission, propositions, state.request) };
