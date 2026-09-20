@@ -1,9 +1,10 @@
 /**
  * Points of the second round that had no test of the reviewer's own: the
- * contact language, the origin of a live run, the Spanish time phrase, and the
- * shape of the pieces the corrections rest on. Run red on 1498107 before the
- * correction, with the new modules imported lazily so a missing module reads
- * as a red test and not as a broken file.
+ * contact language, the origin of a live run, the Spanish time phrase. Three
+ * of the four were run red on 1498107 before their correction (the new
+ * functions are imported lazily so a missing one reads as a red test, not as
+ * a broken file); the header-line test was written together with its module,
+ * so no red run of it exists.
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { computeDraft, resetTranscriptCache } from "../src/lib/ai/pipeline";
