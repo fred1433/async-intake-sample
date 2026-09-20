@@ -18,20 +18,22 @@
  *
  * Duplicates are handled over the whole raw output: several blocks for one
  * media are merged, none ignored, and every block's opinion on readability is
- * kept; two fields with one key are one field (merged when they carry the
- * same text under the one convention of equality the review shares, and
- * uncertain when one of them is; kept as one field with its other values
- * when the texts differ). Anything that fails is withheld, listed, and never
- * shown as a finding. A claim with no source at all is refused the same way.
- * A claim whose words are on a short list is flagged for review, which
- * establishes nothing about it.
+ * kept; the readings of one key are grouped by the one convention of equality
+ * the review shares, every class of equal texts being one value that carries
+ * every doubt declared on any of its readings, whatever the order the draft
+ * returned them in (one class: one field; several: one field with its other
+ * values, none chosen). Anything that fails is withheld, listed, and never
+ * shown as a finding, with what the model proposed kept as it came (value or
+ * statement, citation, doubt) so the reviewer reads what was refused. A claim
+ * with no source at all is refused the same way. A claim whose words are on a
+ * short list is flagged for review, which establishes nothing about it.
  *
  * What the code cannot check is the wording of a rephrase: the claim says so,
  * and the reviewer judges it against the recording.
  */
 import type { RawClaim, RawDraft, RawTranscript } from "./raw";
 import { sameText } from "./text";
-import type { BlockReading, ConflictingValue, Day, Draft, DocumentExtraction, ExtractedField, Place, RecordingClaim, RecordingReview, Transcript, TranscriptSegment, Withheld } from "./types";
+import type { BlockReading, ConflictingValue, Day, Draft, DocumentExtraction, ExtractedField, Place, RecordingClaim, RecordingReview, Transcript, TranscriptSegment, Withheld, WithheldProposal } from "./types";
 
 export interface DocumentSource {
   mediaId: string;
@@ -271,7 +273,7 @@ function isVerbatim(statement: string, quote: string): boolean {
 
 /* ---------- The check ---------- */
 
-type Hold = (key: string, label: string, page: number | undefined, reason: Withheld["reason"], detail: string) => void;
+type Hold = (key: string, label: string, page: number | undefined, reason: Withheld["reason"], detail: string, proposed: WithheldProposal) => void;
 
 /** One block of a document as the model returned it, with its rank when the media came back in several blocks. */
 interface DocumentBlock {
@@ -285,16 +287,18 @@ function checkDocument(blocks: DocumentBlock[], source: DocumentSource, hold: Ho
   for (const { block, rank, of } of blocks) {
     for (const field of block.fields) {
       const quote = field.quote.trim();
-      const refuse = (reason: Withheld["reason"], detail: string) => hold(field.key, field.label, field.page, reason, detail);
+      // What the model proposed goes with the refusal, as it came: the reviewer reads what was refused, and a change in it is a change.
+      const proposed = (anchored: boolean): WithheldProposal => ({ value: field.value.trim(), normalized: field.normalized?.trim() || null, quote, anchored, uncertain: field.uncertain?.trim() || null });
       if (!quote) {
-        refuse("no_source", `"${field.label}" came with no passage to check.`);
+        hold(field.key, field.label, field.page, "no_source", `"${field.label}" came with no passage to check.`, proposed(false));
         continue;
       }
       const pageText = source.pages[field.page];
       if (!pageText || !quoteIsOnPage(quote, pageText)) {
-        refuse("quote_not_found", `"${field.label}": the quoted passage is not on page ${field.page}.`);
+        hold(field.key, field.label, field.page, "quote_not_found", `"${field.label}": the quoted passage is not on page ${field.page}.`, proposed(false));
         continue;
       }
+      const refuse = (reason: Withheld["reason"], detail: string) => hold(field.key, field.label, field.page, reason, detail, proposed(true));
       const checked = [`passage found on page ${field.page}`];
       if (of > 1) checked.push(`proposed in block ${rank} of ${of} the draft returned for this document`);
       const value = field.value.trim();
@@ -328,8 +332,11 @@ function checkDocument(blocks: DocumentBlock[], source: DocumentSource, hold: Ho
       passed.push({ key: field.key, label: field.label, value, normalized, page: field.page, quote, uncertain: field.uncertain?.trim() || null, checked });
     }
   }
-  // Two fields with the same key are one field. The raw shape does not forbid the repeat; the review must never carry two propositions with one id.
-  // Same text under the shared convention: merged. Two texts: both kept, neither chosen.
+  // The readings of one key are one field. The raw shape does not forbid the repeat; the review must never carry two propositions
+  // with one id. The readings are grouped by class of equal texts under the shared convention: a reading equal to the first
+  // value, or to any other value already kept, joins that class, and a doubt on any reading of a class is the class's; a text
+  // equal to none of them is another value. Every value is kept, none is chosen, and the classes do not depend on the order the
+  // draft returned the readings in.
   const fields: ExtractedField[] = [];
   for (const field of passed) {
     const first = fields.find((f) => f.key === field.key);
@@ -337,12 +344,15 @@ function checkDocument(blocks: DocumentBlock[], source: DocumentSource, hold: Ho
       fields.push(field);
       continue;
     }
-    if (sameText(first.value, field.value)) {
-      first.checked.push(`proposed again with the same value (page ${field.page}): merged into this field`);
-      // An uncertainty on either reading makes the merged field uncertain: a merge never loses a doubt.
+    const classes: (ExtractedField | ConflictingValue)[] = [first, ...(first.conflict ?? [])];
+    const same = classes.find((c) => sameText(c.value, field.value));
+    if (same) {
+      const what = same === first ? "field" : "value";
+      same.checked.push(`proposed again with the same value (page ${field.page}): merged into this ${what}`);
+      // An uncertainty on any reading makes the merged value uncertain: a merge never loses a doubt.
       if (field.uncertain) {
-        first.uncertain = first.uncertain ? `${first.uncertain} ${field.uncertain}` : field.uncertain;
-        first.checked.push("the repeated reading was marked uncertain: the merged field is uncertain");
+        same.uncertain = same.uncertain ? `${same.uncertain} ${field.uncertain}` : field.uncertain;
+        same.checked.push(`the repeated reading was marked uncertain: the merged ${what} is uncertain`);
       }
       continue;
     }
@@ -359,10 +369,27 @@ function checkDocument(blocks: DocumentBlock[], source: DocumentSource, hold: Ho
   return { mediaId, readable, unreadableReason, fields, ...(blocks.length > 1 ? { blocks: blocks.length, readings } : {}) };
 }
 
-function checkClaim(claim: RawClaim, source: RecordingSource, hold: (reason: Withheld["reason"], detail: string) => void, block: { rank: number; of: number }): RecordingClaim | null {
+function checkClaim(
+  claim: RawClaim,
+  source: RecordingSource,
+  hold: (reason: Withheld["reason"], detail: string, proposed: WithheldProposal) => void,
+  block: { rank: number; of: number },
+): RecordingClaim | null {
   const quote = claim.quote.trim();
+  // What the model proposed goes with the refusal, as it came: the statement, what it structured, the words it cited, its doubt.
+  const proposed = (anchored: boolean, segment?: { start: number; end: number }): WithheldProposal => ({
+    statement: claim.statement.trim(),
+    nature: claim.nature,
+    days: [...claim.days],
+    earliestHour: claim.earliestHour,
+    location: claim.location,
+    quote,
+    anchored,
+    ...(segment ? { segment } : {}),
+    uncertain: claim.uncertain?.trim() || null,
+  });
   if (!quote) {
-    hold("no_source", `"${claim.label}" came with no words to check.`);
+    hold("no_source", `"${claim.label}" came with no words to check.`, proposed(false));
     return null;
   }
   const located = locateQuote(quote, source.transcript.segments);
@@ -371,26 +398,28 @@ function checkClaim(claim: RawClaim, source: RecordingSource, hold: (reason: Wit
     hold(
       "segment_not_found",
       `"${claim.label}": the quoted words are not in the transcript${dropped ? ` (${dropped} transcription segment${dropped === 1 ? "" : "s"} fell outside the recording and ${dropped === 1 ? "was" : "were"} dropped)` : ""}.`,
+      proposed(false),
     );
     return null;
   }
   const duration = source.durationSeconds;
   if (located.start < 0 || located.end <= located.start || (duration > 0 && located.end > duration)) {
-    hold("segment_out_of_range", `"${claim.label}": the audio window ${located.start}s to ${located.end}s does not fit a recording of ${duration}s.`);
+    hold("segment_out_of_range", `"${claim.label}": the audio window ${located.start}s to ${located.end}s does not fit a recording of ${duration}s.`, proposed(false));
     return null;
   }
+  const refuse = (reason: Withheld["reason"], detail: string) => hold(reason, detail, proposed(true, located));
   const checked = [`quoted words found in the recording at ${located.start.toFixed(1)}s to ${located.end.toFixed(1)}s`];
   if (block.of > 1) checked.push(`proposed in block ${block.rank} of ${block.of} the draft returned for this recording`);
   const flagged = [claim.statement, claim.label, claim.uncertain ?? ""].join(" ").match(FLAGGED);
   if (flagged) {
-    hold(
+    refuse(
       "flagged_for_review",
       `"${claim.label}": flagged for review (matched: "${flagged[0]}"). The word is on the short list that sends a statement to the reviewer unread by the code; whether the statement is clinical is not established by the code. Nothing clinical is assessed here.`,
     );
     return null;
   }
   if (claim.key === "other") {
-    hold("free_statement", `"${claim.label}": a free statement is not assessed by the code. The quoted words are "${quote}"; the reviewer reads them.`);
+    refuse("free_statement", `"${claim.label}": a free statement is not assessed by the code. The quoted words are "${quote}"; the reviewer reads them.`);
     return null;
   }
 
@@ -399,7 +428,7 @@ function checkClaim(claim: RawClaim, source: RecordingSource, hold: (reason: Wit
   const listed = KEY_LABELS[claim.key];
   for (const day of claim.days) {
     if (!DAY_WORDS[day].some((w) => quoted.includes(w))) {
-      hold("structured_not_in_quote", `"${claim.label}": ${day} is not in the quoted words.`);
+      refuse("structured_not_in_quote", `"${claim.label}": ${day} is not in the quoted words.`);
       return null;
     }
     checked.push(`${day} is in the quoted words; listed under ${listed} as extracted, not established by the code`);
@@ -407,14 +436,14 @@ function checkClaim(claim: RawClaim, source: RecordingSource, hold: (reason: Wit
   if (claim.days.length === 0 && (claim.key === "days_that_work" || claim.key === "days_that_do_not_work")) checked.push("no day in the structured part");
   if (claim.earliestHour !== null) {
     if (!Number.isInteger(claim.earliestHour) || claim.earliestHour < 0 || claim.earliestHour > 23) {
-      hold("structured_not_in_quote", `"${claim.label}": ${claim.earliestHour} is not an hour of the day.`);
+      refuse("structured_not_in_quote", `"${claim.label}": ${claim.earliestHour} is not an hour of the day.`);
       return null;
     }
     checked.push(`earliest hour ${clock(claim.earliestHour)} as extracted by the model; the code reads no hour from the words`);
   } else if (claim.key === "time_window") checked.push("no hour in the structured part");
   if (claim.location !== null) {
     if (!PLACE_WORDS[claim.location].some((w) => quoted.includes(w))) {
-      hold("structured_not_in_quote", `"${claim.label}": the place "${claim.location}" is not in the quoted words.`);
+      refuse("structured_not_in_quote", `"${claim.label}": the place "${claim.location}" is not in the quoted words.`);
       return null;
     }
     checked.push(`place "${claim.location}" is in the quoted words; listed as extracted, not established by the code`);
@@ -470,7 +499,7 @@ export function verifyDraft(
       checkDocument(
         blocks.map((block, index) => ({ block, rank: index + 1, of: blocks.length })),
         source,
-        (key, label, page, reason, detail) => withheld.push({ mediaId, key, label, page, reason, detail }),
+        (key, label, page, reason, detail, proposed) => withheld.push({ mediaId, key, label, page, proposed, reason, detail }),
       ),
     );
   }
@@ -484,7 +513,7 @@ export function verifyDraft(
     const claims: RecordingClaim[] = [];
     blocks.forEach((block, index) => {
       for (const claim of block.claims) {
-        const kept = checkClaim(claim, source, (reason, detail) => withheld.push({ mediaId, key: claim.key, label: claim.label, reason, detail }), { rank: index + 1, of: blocks.length });
+        const kept = checkClaim(claim, source, (reason, detail, proposed) => withheld.push({ mediaId, key: claim.key, label: claim.label, proposed, reason, detail }), { rank: index + 1, of: blocks.length });
         if (kept) claims.push(kept);
       }
     });

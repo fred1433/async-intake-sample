@@ -138,11 +138,40 @@ export interface RecordingReview {
   blocks?: number;
 }
 
+/**
+ * What the model proposed and the code refused, kept as it came so the
+ * reviewer reads what was refused: the value or the statement, the passage or
+ * the words it cited, and the doubt it declared. Nothing in it is
+ * established; all of it is part of the proposition's key, so a refused
+ * proposal that changes, its doubt included, is proposed again.
+ */
+export interface WithheldProposal {
+  /** A document field: the value as the model read it, and the machine form it gave, if any. */
+  value?: string;
+  normalized?: string | null;
+  /** A recording claim: the attributed statement, and what the model structured from the words. */
+  statement?: string;
+  nature?: Nature;
+  days?: Day[];
+  earliestHour?: number | null;
+  location?: Place | null;
+  /** The passage or the words the model cited, as it gave them. */
+  quote: string;
+  /** True when the code found the citation in the source (the passage on the page it names, the words in the transcript). */
+  anchored: boolean;
+  /** The audio window the code located from the quoted words, when it found them. */
+  segment?: { start: number; end: number };
+  /** What the model itself said it was unsure of. */
+  uncertain: string | null;
+}
+
 export interface Withheld {
   mediaId: string;
   key: string;
   label: string;
   page?: number;
+  /** Absent for a whole block the draft named wrongly; present for every field or claim the check refused. */
+  proposed?: WithheldProposal;
   reason:
     | "no_source"
     | "quote_not_found"
@@ -265,6 +294,12 @@ export interface RequestItem {
   basisMissing?: { at: string; because: string };
   /** Set when the item was resolved by the reviewer and is asked again: only a new submission, or the reviewer, reopens it. */
   reopened?: { at: string; because: string };
+  /**
+   * The submission the reviewer resolved this line under: its key (date and version included). The resolution applies to that
+   * submission and to no other: once the family sends the form again, a proposition that asks the question is a new instance.
+   * Set by the resolution, on the line it closes; never on a line the family closed.
+   */
+  submissionVersion?: string;
 }
 
 export interface RequestApproval {
@@ -297,14 +332,19 @@ export interface RequestDraft {
   edited?: { at: string };
 }
 
+/** A proposition as it was when the file was approved: everything the fingerprint covers, the doubts the model declared included. */
 export interface ApprovedProposition {
   id: string;
   label: string;
   statement: string;
   state: PropositionState;
+  nature: Nature | "rule";
   finding: Finding;
   evidence: Evidence[];
   criterion?: Criterion;
+  /** The structured facts and the uncertainties the reviewer looked at, as they were. */
+  details?: Record<string, string[]>;
+  inRequest: boolean;
 }
 
 export interface FileApproval {

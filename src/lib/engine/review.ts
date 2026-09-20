@@ -36,7 +36,7 @@
 import { documentItems, promptQuestions, TEMPLATE } from "../template";
 import { dict, optionLabel } from "../i18n";
 import { sameText } from "./text";
-import { KEY_LABELS } from "./verify";
+import { clock, KEY_LABELS } from "./verify";
 import type {
   ApprovedProposition,
   Criterion,
@@ -55,6 +55,7 @@ import type {
   ReviewState,
   Stage,
   Submission,
+  Withheld,
 } from "./types";
 import { Refused } from "./types";
 
@@ -718,6 +719,44 @@ const WITHHELD_REASONS: Record<string, string> = {
   unknown_media: "The draft names a file this submission does not hold.",
 };
 
+/** A sentence ends with a full stop: a doubt written without one is still a sentence here. */
+function sentence(text: string): string {
+  const trimmed = text.trim();
+  return /[.!?]$/.test(trimmed) ? trimmed : `${trimmed}.`;
+}
+
+/**
+ * What the model proposed under a refusal, as it came: the value or the
+ * statement, the words it cited, what it structured from them, and the doubt
+ * it declared. None of it is established, all of it is the reviewer's to
+ * read, and all of it is in the key of the proposition: a refused proposal
+ * that changes, its doubt included, is a proposition to look at again.
+ */
+function withheldDetails(w: Withheld): Record<string, string[]> {
+  const details: Record<string, string[]> = { reason: [w.reason] };
+  const p = w.proposed;
+  if (!p) return details;
+  const what = p.statement ?? p.value;
+  if (what !== undefined && what !== "") details.proposed = [what];
+  if (p.normalized) details.normalized = [p.normalized];
+  if (p.days && p.days.length > 0) details.days = [...p.days];
+  if (p.earliestHour !== undefined && p.earliestHour !== null) details.earliest = [clock(p.earliestHour)];
+  if (p.location) details.place = [p.location];
+  if (p.quote) details.quote = [p.quote];
+  if (p.uncertain) details.uncertain = [p.uncertain];
+  return details;
+}
+
+/** The statement of a refused proposition: what the code refused, then what the model had proposed and the doubt it declared. */
+function withheldStatement(w: Withheld): string {
+  const parts = [`Withheld by the source check. ${w.detail}`];
+  const p = w.proposed;
+  const what = p?.statement ?? p?.value;
+  if (what) parts.push(`The model proposed "${what}"; the code did not keep it, and nothing in it is established.`);
+  if (p?.uncertain) parts.push(`The model said it was unsure: ${sentence(p.uncertain)}`);
+  return parts.join(" ");
+}
+
 /** What the models proposed and the code refused: listed as not evaluable, never as a finding. */
 function withheldPropositions(submission: Submission, draft: Draft, now: string, version: number): Proposition[] {
   const out: Proposition[] = [];
@@ -760,7 +799,7 @@ function withheldPropositions(submission: Submission, draft: Draft, now: string,
     const count = (seen.get(`${w.mediaId}:${w.key}`) ?? 0) + 1;
     seen.set(`${w.mediaId}:${w.key}`, count);
     const id = `withheld:${w.mediaId}:${w.key}${count > 1 ? `:${count}` : ""}`;
-    const statement = `Withheld by the source check. ${w.detail}`;
+    const statement = withheldStatement(w);
     const evidence: Evidence[] = docItem
       ? [{ kind: "document", mediaId: w.mediaId, page: w.page ?? 1, quote: "" }]
       : [{ kind: "audio", mediaId: w.mediaId, start: 0, end: submission.recordings[prompt!.id]?.durationSeconds ?? 0, quote: "" }];
@@ -784,7 +823,7 @@ function withheldPropositions(submission: Submission, draft: Draft, now: string,
         history: [{ statement, by: "rule", at: now, version }],
         dependsOn: [],
         inRequest: false,
-        details: { reason: [w.reason] },
+        details: withheldDetails(w),
       }),
     );
   }
@@ -1354,15 +1393,33 @@ function latestLine(items: RequestItem[], slot: string): RequestItem | undefined
  * latest line of the question is closed by the reviewer. A question asked
  * again (a new submission, the reviewer asking) has an open line as its
  * latest, and no resolution applies to it: it is a new instance.
+ *
+ * A resolution holds for the submission it was given under and for no other.
+ * Pass the key of the submission in hand and a resolution given under an
+ * earlier one is spent: the family sent the form again, so a proposition that
+ * asks the question again opens a new instance. Without that key, every
+ * resolution is read as applying, which is what a caller that has no
+ * submission to compare against can say.
  */
-export function resolvedQuestions(request: RequestDraft | undefined): Set<string> {
+export function resolvedQuestions(request: RequestDraft | undefined, submissionVersion?: string): Set<string> {
   const slots = new Set<string>();
   for (const item of request?.items ?? []) {
     const slot = slotOf(item.propositionId);
-    if (latestLine(request!.items, slot)?.satisfiedBy === "reviewer") slots.add(slot);
+    const latest = latestLine(request!.items, slot);
+    if (latest?.satisfiedBy !== "reviewer") continue;
+    // A line closed before this field existed is not bound to a submission: it keeps applying, as it did.
+    if (submissionVersion && latest.submissionVersion && latest.submissionVersion !== submissionVersion) continue;
+    slots.add(slot);
   }
   return slots;
 }
+
+/** True when the reviewer's resolution of this question was given under another submission: it no longer applies. */
+function resolutionSpent(latest: RequestItem | undefined, submissionVersion: string): boolean {
+  return latest?.satisfiedBy === "reviewer" && Boolean(latest.submissionVersion) && latest.submissionVersion !== submissionVersion;
+}
+
+const ASKED_AGAIN_NEW_SUBMISSION = "the family sent the form again since this question was resolved";
 
 /** The slot an item was composed for, as the family has it now: a change here is a piece the family sent, or took away. */
 function slotBasisNow(item: RequestItem, submission: Submission): string | null {
@@ -1441,6 +1498,7 @@ function composeRequest(submission: Submission, propositions: Proposition[], pre
   const used = new Set<RequestItem>();
   const reopenedItems: string[] = [];
   const earlier = previous?.items ?? [];
+  const submissionVersion = submissionKey(submission);
   for (const p of propositions) {
     if (!(p.inRequest && p.requestable)) continue;
     const slot = slotOf(p.id);
@@ -1463,7 +1521,8 @@ function composeRequest(submission: Submission, propositions: Proposition[], pre
     const latest = latestLine(earlier, slot);
     const item: RequestItem = { propositionId: p.id, kind: p.requestable, basis, facts, instance: latest ? instanceOf(latest) + 1 : 1 };
     if (latest?.satisfiedBy === "reviewer") {
-      item.reopened = { at: now, because: because || "asked again" };
+      // A resolution given under an earlier submission is spent: say so, whatever the run that noticed it was doing.
+      item.reopened = { at: now, because: resolutionSpent(latest, submissionVersion) ? ASKED_AGAIN_NEW_SUBMISSION : because || "asked again" };
       reopenedItems.push(p.id);
     }
     items.push(item);
@@ -1799,7 +1858,10 @@ export function resolveRequestItem(state: ReviewState, propositionId: string, no
   const item = known.find((i) => !i.satisfiedAt);
   if (!item) return state;
   const version = state.version + 1;
-  const items = state.request.items.map((i) => (i === item ? { ...i, satisfiedAt: now, satisfiedBy: "reviewer" as const, basisMissing: undefined } : i));
+  // The line remembers the submission it was resolved under: the resolution applies to that submission and to no other.
+  const items = state.request.items.map((i) =>
+    i === item ? { ...i, satisfiedAt: now, satisfiedBy: "reviewer" as const, basisMissing: undefined, submissionVersion: submissionKey(state.submission) } : i,
+  );
   const propositions = state.propositions.map((p) => (p.id === propositionId ? { ...p, inRequest: false } : p));
   const label = state.propositions.find((p) => p.id === propositionId)?.label ?? propositionId;
   let next: ReviewState = { ...state, request: { ...state.request, items }, propositions, version };
@@ -1882,14 +1944,18 @@ export function approveFile(state: ReviewState, version: number, now: string = n
     throw Object.assign(new Refused("not_reviewed", check.reasons.join(" ")), { state: refused });
   }
   const hash = contentFingerprint(state);
+  // The snapshot keeps what the fingerprint covers, so the archive restores what the reviewer looked at, the doubts included.
   const snapshot: ApprovedProposition[] = state.propositions.map((p) => ({
     id: p.id,
     label: p.label,
     statement: p.statement,
     state: p.state,
+    nature: p.nature,
     finding: p.finding,
     evidence: p.evidence,
     criterion: p.criterion,
+    details: p.details,
+    inRequest: p.inRequest,
   }));
   const approval = {
     version: state.version,
@@ -1924,11 +1990,22 @@ function reviewedThrough(p: Proposition, request: RequestDraft | undefined): boo
  * request included, is flagged. A question the reviewer resolved, and nobody
  * opened again since, is not asked again by a run, whether its proposition is
  * unchanged, proposed again, or new to this draft: only a new submission, or
- * the reviewer, opens it again.
+ * the reviewer, opens it again. The resolution belongs to the submission it
+ * was given under: once the family sends the form again it is spent for good,
+ * not only during the rebuild that carried the new submission.
+ *
+ * A question whose line is still open is asked through that line: a
+ * proposition that comes back after a draft that did not carry it is in the
+ * request again, with no click, because the line never stopped asking.
  */
-function merge(previous: Proposition[], fresh: Proposition[], now: string, because: string, context: { request?: RequestDraft; submissionChanged: boolean }): Proposition[] {
-  const resolved = context.submissionChanged ? new Set<string>() : resolvedQuestions(context.request);
-  const asked = (old: Proposition | undefined, next: Proposition) => (resolved.has(slotOf(next.id)) ? false : (old?.inRequest ?? false) || next.inRequest);
+function merge(previous: Proposition[], fresh: Proposition[], now: string, because: string, context: { request?: RequestDraft; submissionVersion: string }): Proposition[] {
+  const resolved = resolvedQuestions(context.request, context.submissionVersion);
+  const open = new Set((context.request?.items ?? []).filter((i) => !i.satisfiedAt).map((i) => slotOf(i.propositionId)));
+  const asked = (old: Proposition | undefined, next: Proposition) => {
+    const slot = slotOf(next.id);
+    if (resolved.has(slot)) return false;
+    return open.has(slot) || (old?.inRequest ?? false) || next.inRequest;
+  };
   return fresh.map((next) => {
     const old = previous.find((p) => p.id === next.id);
     // A proposition new to this draft can still be the proposition of a resolved question (an unusable recording, usable in
@@ -1965,9 +2042,8 @@ function merge(previous: Proposition[], fresh: Proposition[], now: string, becau
  * cross-check does not stay reviewed over a statement that was proposed again.
  */
 function rebuild(state: ReviewState, submission: Submission, draft: Draft, version: number, now: string, because: string): ReviewState {
-  const submissionChanged = submissionKey(submission) !== submissionKey(state.submission);
   const fresh = buildPropositions(submission, draft, now, version);
-  const merged = merge(state.propositions, fresh, now, because, { request: state.request, submissionChanged });
+  const merged = merge(state.propositions, fresh, now, because, { request: state.request, submissionVersion: submissionKey(submission) });
   const changed = new Map<string, string>();
   for (const old of state.propositions) {
     const next = fresh.find((p) => p.id === old.id);

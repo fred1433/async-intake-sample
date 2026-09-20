@@ -46,6 +46,8 @@ export function JournalPanel({ state }: { state: ReviewState }) {
                   {a.snapshot.map((s) => (
                     <li key={s.id}>
                       <span className="font-medium text-ink">{s.label}</span> ({FINDING_LABELS[s.finding]}, {s.state}): {s.statement}
+                      {/* The doubts the reviewer looked at when approving: the archive shows what was examined, not a tidier version of it. */}
+                      {(s.details?.uncertain ?? []).length > 0 && <span className="text-amber-ink"> Marked uncertain by the model: {s.details!.uncertain.join(" ")}</span>}
                     </li>
                   ))}
                 </ul>
